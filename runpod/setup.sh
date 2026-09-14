@@ -118,12 +118,18 @@ declare -A REPOS=(
 )
 
 echo "--> Klone Custom Nodes parallel..."
+CLONE_PIDS=()
 for name in "${!REPOS[@]}"; do
     if [ ! -d "$NODES_DIR/$name" ]; then
         git clone --depth 1 "${REPOS[$name]}" "$NODES_DIR/$name" &
+        CLONE_PIDS+=($!)
     fi
 done
-wait
+
+# Warte AUSSCHLIESSLICH auf die Git-Prozesse, nicht auf tee
+if [ ${#CLONE_PIDS[@]} -gt 0 ]; then
+    wait "${CLONE_PIDS[@]}"
+fi
 
 # SadTalker requirements patchen
 if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
