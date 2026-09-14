@@ -48,7 +48,7 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v aria2c >/dev/null 2>&1 ||
     echo "--> Installiere Basis-Pakete (apt)..."
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        git curl wget aria2 ffmpeg unzip build-essential python3-venv \
+        git curl wget aria2 ffmpeg unzip build-essential python3-venv btop ncdu duf bat \
         libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1
 fi
 
