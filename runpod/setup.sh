@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# ============================================================
+# High-Speed ComfyUI Setup Script (uv + aria2c + Parallelism)
+# ============================================================
+set -euo pipefail
+export GIT_TERMINAL_PROMPT=0
+
+source /workspace/venv/bin/activate
+BASE_DIR="/workspace"
+COMFY_DIR="$BASE_DIR/ComfyUI"
+MODELS_DIR="$COMFY_DIR/models"
+
+LOG="/var/log/comfyui_setup.log"
+exec > >(tee -a "$LOG") 2>&1
+
+echo "=== $(date) Starting High-Speed Setup ==="
+
+# ------------------------------------------------------------
+# 1. Download-Helfer (aria2c mit Fallback auf curl)
+# ------------------------------------------------------------
+fast_download() {
+    local target="$1"
+    local url="$2"
+    if [ ! -s "$target" ]; then
+        mkdir -p "$(dirname "$target")"
+        echo "Lade $(basename "$target")..."
+        if command -v aria2c >/dev/null 2>&1; then
+            aria2c -q -c -x 16 -s 16 -k 1M \
+                --header="User-Agent: Mozilla/5.0" \
+                --check-certificate=false \
+                -d "$(dirname "$target")" \
+                -o "$(basename "$target")" "$url" || \
+            curl -k -L -f -A "Mozilla/5.0" -o "$target" "$url"
+        else
+            curl -k -L -f -A "Mozilla/5.0" -o "$target" "$url"
+        fi
+    else
+        echo "$(basename "$target") bereits vorhanden."
+    fi
+}
+
+# ------------------------------------------------------------
+# 2. Parallel-Task A: Model-Downloads im Hintergrund starten
+# ------------------------------------------------------------
+download_models_background() {
+    echo "--> [Background] Starte Modell-Downloads..."
+
+    # Wav2Lip
+    fast_download "$MODELS_DIR/wav2lip/wav2lip.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
+    fast_download "$MODELS_DIR/wav2lip/wav2lip_gan.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip_gan.pth"
+    fast_download "$MODELS_DIR/wav2lip/s3fd-619a316847.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/s3fd-619a316812.pth"
+
+    # LivePortrait
+    for file in appearance_feature_extractor.safetensors motion_extractor.safetensors spade_generator.safetensors warping_module.safetensors stitching_retargeting_module.safetensors landmark.onnx; do
+        fast_download "$MODELS_DIR/liveportrait/$file" "https://huggingface.co/Kijai/LivePortrait_safetensors/resolve/main/$file"
+    done
+
+    # Insightface Buffalo_L
+    if [ ! -f "$MODELS_DIR/insightface/models/buffalo_l/det_10g.onnx" ]; then
+        curl -L -f -o "$MODELS_DIR/insightface/models/buffalo_l.zip" "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+        unzip -o -q "$MODELS_DIR/insightface/models/buffalo_l.zip" -d "$MODELS_DIR/insightface/models/buffalo_l"
+        rm -f "$MODELS_DIR/insightface/models/buffalo_l.zip"
+    fi
+
+    # SadTalker
+    fast_download "$MODELS_DIR/sadtalker/SadTalker_V0.0.2_256.safetensors" "https://huggingface.co/camenduru/SadTalker/resolve/main/new/checkpoints/SadTalker_V0.0.2_256.safetensors"
+    fast_download "$MODELS_DIR/sadtalker/SadTalker_V0.0.2_512.safetensors" "https://huggingface.co/camenduru/SadTalker/resolve/main/new/checkpoints/SadTalker_V0.0.2_512.safetensors"
+    fast_download "$MODELS_DIR/sadtalker/mapping_00109-model.pth.tar" "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00109-model.pth.tar"
+    fast_download "$MODELS_DIR/sadtalker/mapping_00229-model.pth.tar" "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00229-model.pth.tar"
+
+    # GFPGAN & FaceXLib
+    fast_download "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth"
+    fast_download "$MODELS_DIR/facexlib/detection_Resnet50_Final.pth" "https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth"
+    fast_download "$MODELS_DIR/facexlib/parsing_parsenet.pth" "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_parsenet.pth"
+
+    # Diffusion & VAE
+    fast_download "$MODELS_DIR/diffusion_models/ltx-video-2b-v0.9.5.safetensors" "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors"
+    fast_download "$MODELS_DIR/vae/vae-ft-mse-840000-ema-pruned.safetensors" "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors"
+
+    echo "✓ [Background] Alle Modell-Downloads abgeschlossen."
+}
+
+# Starte Modell-Downloads parallel im Hintergrund
+download_models_background &
+DOWNLOAD_PID=$!
+
+# ------------------------------------------------------------
+# 3. Parallel-Task B: Git Clones & High-Speed Pip mit uv
+# ------------------------------------------------------------
+echo "--> Installiere uv Package-Manager..."
+pip install --no-cache-dir -q uv
+
+echo "--> Klone / Aktualisiere ComfyUI..."
+if [ ! -d "$COMFY_DIR" ]; then
+    git clone https://github.com/comfyanonymous/ComfyUI.git "$COMFY_DIR"
+else
+    (cd "$COMFY_DIR" && git pull)
+fi
+
+# Custom Nodes parallel clonen
+NODES_DIR="$COMFY_DIR/custom_nodes"
+mkdir -p "$NODES_DIR"
+
+declare -A REPOS=(
+    ["ComfyUI-LivePortrait"]="https://github.com/kijai/ComfyUI-LivePortrait.git"
+    ["ComfyUI_wav2lip"]="https://github.com/ShmuelRonen/ComfyUI_wav2lip.git"
+    ["Comfyui-SadTalker"]="https://github.com/haomole/Comfyui-SadTalker.git"
+    ["ComfyUI-VideoHelperSuite"]="https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+    ["ComfyUI-GGUF"]="https://github.com/city96/ComfyUI-GGUF.git"
+)
+
+for name in "${!REPOS[@]}"; do
+    if [ ! -d "$NODES_DIR/$name" ]; then
+        git clone "${REPOS[$name]}" "$NODES_DIR/$name" &
+    fi
+done
+wait  # Warte kurz, bis alle Git-Clones da sind
+
+# SadTalker requirements patchen
+if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
+    sed -i 's/==/>=/g' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
+    sed -i '/numpy/d' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
+fi
+
+# Alle Python-Abhängigkeiten gesammelt und blitzschnell mit uv installieren
+echo "--> Installiere Python-Pakete via uv..."
+uv pip install -r "$COMFY_DIR/requirements.txt"
+for req in "$NODES_DIR"/*/requirements.txt; do
+    [ -f "$req" ] && uv pip install -r "$req" || true
+done
+uv pip install scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+
+# ------------------------------------------------------------
+# 4. Synchronisation
+# ------------------------------------------------------------
+echo "--> Warte auf Abschluss der Modell-Downloads..."
+wait "$DOWNLOAD_PID"
+
+echo "=== SETUP ERFOLGREICH BEENDET ==="
