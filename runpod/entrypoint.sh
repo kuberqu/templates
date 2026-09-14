@@ -44,12 +44,18 @@ if ! curl -s -I --connect-timeout 2 https://github.com >/dev/null 2>&1; then
     echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 fi
 
-if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v aria2c >/dev/null 2>&1 || ! dpkg -s libgl1 >/dev/null 2>&1; then
-    echo "--> Installiere Basis-Pakete (apt)..."
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v btop >/dev/null 2>&1 || ! dpkg -s libgl1 >/dev/null 2>&1; then
+    echo "--> Installiere Basis- & Monitoring-Pakete (apt)..."
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        git curl wget aria2 ffmpeg unzip build-essential python3-venv btop ncdu duf bat \
-        libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1
+        git curl wget aria2 ffmpeg unzip build-essential python3-venv \
+        btop ncdu duf bat \
+        libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1 || true
+
+    # batcat als 'bat' verlinken
+    if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+        ln -sf /usr/bin/batcat /usr/local/bin/bat
+    fi
 fi
 
 COMFY_DIR="/workspace/ComfyUI"
