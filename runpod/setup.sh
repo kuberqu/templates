@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # High-Speed ComfyUI Setup Script (uv + aria2c + Parallelism)
+# Repository: kuberqu/templates/runpod/setup.sh
 # ============================================================
 set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
@@ -16,7 +17,7 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) Starting High-Speed Setup ==="
 
 # ------------------------------------------------------------
-# 1. Download-Helfer (aria2c mit Fallback auf curl)
+# 1. Download-Helfer (aria2c mit curl-Fallback)
 # ------------------------------------------------------------
 fast_download() {
     local target="$1"
@@ -40,10 +41,10 @@ fast_download() {
 }
 
 # ------------------------------------------------------------
-# 2. Parallel-Task A: Model-Downloads im Hintergrund starten
+# 2. Parallel-Task A: Model-Downloads im Hintergrund
 # ------------------------------------------------------------
 download_models_background() {
-    echo "--> [Background] Starte Modell-Downloads..."
+    echo "--> [Background] Starte parallele Modell-Downloads..."
 
     # Wav2Lip
     fast_download "$MODELS_DIR/wav2lip/wav2lip.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
@@ -55,7 +56,7 @@ download_models_background() {
         fast_download "$MODELS_DIR/liveportrait/$file" "https://huggingface.co/Kijai/LivePortrait_safetensors/resolve/main/$file"
     done
 
-    # Insightface Buffalo_L
+    # InsightFace Buffalo_L
     if [ ! -f "$MODELS_DIR/insightface/models/buffalo_l/det_10g.onnx" ]; then
         curl -L -f -o "$MODELS_DIR/insightface/models/buffalo_l.zip" "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
         unzip -o -q "$MODELS_DIR/insightface/models/buffalo_l.zip" -d "$MODELS_DIR/insightface/models/buffalo_l"
@@ -80,12 +81,12 @@ download_models_background() {
     echo "✓ [Background] Alle Modell-Downloads abgeschlossen."
 }
 
-# Starte Modell-Downloads parallel im Hintergrund
+# Starte Downloads asynchron im Hintergrund
 download_models_background &
 DOWNLOAD_PID=$!
 
 # ------------------------------------------------------------
-# 3. Parallel-Task B: Git Clones & High-Speed Pip mit uv
+# 3. Parallel-Task B: Git Clones & High-Speed Python Packages
 # ------------------------------------------------------------
 echo "--> Installiere uv Package-Manager..."
 pip install --no-cache-dir -q uv
@@ -114,16 +115,15 @@ for name in "${!REPOS[@]}"; do
         git clone "${REPOS[$name]}" "$NODES_DIR/$name" &
     fi
 done
-wait  # Warte kurz, bis alle Git-Clones da sind
+wait
 
-# SadTalker requirements patchen
+# SadTalker requirements anpassen
 if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
     sed -i 's/==/>=/g' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
     sed -i '/numpy/d' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
 fi
 
-# Alle Python-Abhängigkeiten gesammelt und blitzschnell mit uv installieren
-echo "--> Installiere Python-Pakete via uv..."
+echo "--> Installiere Python-Abhängigkeiten via uv..."
 uv pip install -r "$COMFY_DIR/requirements.txt"
 for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] && uv pip install -r "$req" || true
@@ -133,7 +133,7 @@ uv pip install scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 # ------------------------------------------------------------
 # 4. Synchronisation
 # ------------------------------------------------------------
-echo "--> Warte auf Abschluss der Modell-Downloads..."
+echo "--> Warte auf Fertigstellung der Modell-Downloads..."
 wait "$DOWNLOAD_PID"
 
 echo "=== SETUP ERFOLGREICH BEENDET ==="
