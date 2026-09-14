@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# High-Speed ComfyUI Setup Script (uv + aria2c + Parallelism)
+# High-Speed ComfyUI Setup Script (Race-Condition Free)
 # Repository: kuberqu/templates/runpod/setup.sh
 # ============================================================
 set -euo pipefail
@@ -17,7 +17,21 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) Starting High-Speed Setup ==="
 
 # ------------------------------------------------------------
-# 1. Download-Helfer (aria2c mit curl-Fallback)
+# 1. ComfyUI Core zuerst klonen & Verzeichnisse vorbereiten
+# ------------------------------------------------------------
+echo "--> Klone / Aktualisiere ComfyUI Core..."
+if [ ! -d "$COMFY_DIR/.git" ]; then
+    rm -rf "$COMFY_DIR"
+    git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$COMFY_DIR"
+else
+    (cd "$COMFY_DIR" && git pull)
+fi
+
+# Ordnerstruktur vollständig vorbereiten
+mkdir -p "$MODELS_DIR"/{checkpoints,vae,clip,loras,upscale_models,insightface/models,wav2lip,sadtalker,liveportrait,gfpgan,facexlib,diffusion_models}
+
+# ------------------------------------------------------------
+# 2. Download-Helfer
 # ------------------------------------------------------------
 fast_download() {
     local target="$1"
@@ -41,10 +55,10 @@ fast_download() {
 }
 
 # ------------------------------------------------------------
-# 2. Parallel-Task A: Model-Downloads im Hintergrund
+# 3. Parallel-Task A: Modell-Downloads starten
 # ------------------------------------------------------------
 download_models_background() {
-    echo "--> [Background] Starte parallele Modell-Downloads..."
+    echo "--> [Background] Starte Modell-Downloads..."
 
     # Wav2Lip
     fast_download "$MODELS_DIR/wav2lip/wav2lip.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
@@ -58,7 +72,8 @@ download_models_background() {
 
     # InsightFace Buffalo_L
     if [ ! -f "$MODELS_DIR/insightface/models/buffalo_l/det_10g.onnx" ]; then
-        curl -L -f -o "$MODELS_DIR/insightface/models/buffalo_l.zip" "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
+        mkdir -p "$MODELS_DIR/insightface/models"
+        curl -k -L -f -o "$MODELS_DIR/insightface/models/buffalo_l.zip" "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip"
         unzip -o -q "$MODELS_DIR/insightface/models/buffalo_l.zip" -d "$MODELS_DIR/insightface/models/buffalo_l"
         rm -f "$MODELS_DIR/insightface/models/buffalo_l.zip"
     fi
@@ -81,24 +96,16 @@ download_models_background() {
     echo "✓ [Background] Alle Modell-Downloads abgeschlossen."
 }
 
-# Starte Downloads asynchron im Hintergrund
+# Startet Modell-Downloads im Hintergrund
 download_models_background &
 DOWNLOAD_PID=$!
 
 # ------------------------------------------------------------
-# 3. Parallel-Task B: Git Clones & High-Speed Python Packages
+# 4. Parallel-Task B: Nodes & uv-Installation
 # ------------------------------------------------------------
 echo "--> Installiere uv Package-Manager..."
 pip install --no-cache-dir -q uv
 
-echo "--> Klone / Aktualisiere ComfyUI..."
-if [ ! -d "$COMFY_DIR" ]; then
-    git clone https://github.com/comfyanonymous/ComfyUI.git "$COMFY_DIR"
-else
-    (cd "$COMFY_DIR" && git pull)
-fi
-
-# Custom Nodes parallel clonen
 NODES_DIR="$COMFY_DIR/custom_nodes"
 mkdir -p "$NODES_DIR"
 
@@ -110,14 +117,15 @@ declare -A REPOS=(
     ["ComfyUI-GGUF"]="https://github.com/city96/ComfyUI-GGUF.git"
 )
 
+echo "--> Klone Custom Nodes parallel..."
 for name in "${!REPOS[@]}"; do
     if [ ! -d "$NODES_DIR/$name" ]; then
-        git clone "${REPOS[$name]}" "$NODES_DIR/$name" &
+        git clone --depth 1 "${REPOS[$name]}" "$NODES_DIR/$name" &
     fi
 done
 wait
 
-# SadTalker requirements anpassen
+# SadTalker requirements patchen
 if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
     sed -i 's/==/>=/g' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
     sed -i '/numpy/d' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
@@ -131,7 +139,7 @@ done
 uv pip install scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 
 # ------------------------------------------------------------
-# 4. Synchronisation
+# 5. Synchronisation
 # ------------------------------------------------------------
 echo "--> Warte auf Fertigstellung der Modell-Downloads..."
 wait "$DOWNLOAD_PID"
