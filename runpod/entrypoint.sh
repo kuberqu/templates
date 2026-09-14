@@ -122,7 +122,7 @@ install_node "https://github.com/haomole/Comfyui-SadTalker.git" "Comfyui-SadTalk
 install_node "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git" "ComfyUI-VideoHelperSuite"
 install_node "https://github.com/city96/ComfyUI-GGUF.git" "ComfyUI-GGUF"
 
-pip install --no-cache-dir "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+pip install --no-cache-dir scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 
 # Models
 mkdir -p "$MODELS_DIR"/{checkpoints,vae,clip,loras,upscale_models,insightface/models,wav2lip,sadtalker,liveportrait,gfpgan,facexlib,diffusion_models}
@@ -183,13 +183,13 @@ fi
 if [ ! -d "$COMFY_DIR" ] || [ ! -f "$MODELS_DIR/wav2lip/s3fd-619a316847.pth" ]; then
     echo "--> Erstinstallation erforderlich. Führe setup.sh aus..."
     /bin/bash /workspace/setup.sh
-elif ! python3 -c "import alembic, sqlalchemy" >/dev/null 2>&1; then
+elif ! python3 -c "import alembic, sqlalchemy, scipy" >/dev/null 2>&1; then
     echo "--> Fehlende Pip-Pakete nach Container-Reset. Installiere nach..."
     pip install --no-cache-dir -r "$COMFY_DIR/requirements.txt"
     for req in "$COMFY_DIR"/custom_nodes/*/requirements.txt; do
         [ -f "$req" ] && pip install --no-cache-dir -r "$req" || true
     done
-    pip install --no-cache-dir "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+    pip install --no-cache-dir scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 fi
 
 echo "--> Workspace intakt. Führe Fast-Boot aus..."
