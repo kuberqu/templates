@@ -11,7 +11,7 @@ BASE_DIR="/workspace"
 COMFY_DIR="$BASE_DIR/ComfyUI"
 MODELS_DIR="$COMFY_DIR/models"
 
-LOG="/var/log/comfyui_setup.log"
+LOG="/workspace/comfyui_setup.log"
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=== $(date) Starting High-Speed Setup ==="
