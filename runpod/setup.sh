@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# High-Speed ComfyUI Setup Script (Race-Condition Free)
+# High-Speed ComfyUI Setup Script (uv + aria2c + Parallelism)
 # Repository: kuberqu/templates/runpod/setup.sh
 # ============================================================
 set -euo pipefail
@@ -11,13 +11,14 @@ BASE_DIR="/workspace"
 COMFY_DIR="$BASE_DIR/ComfyUI"
 MODELS_DIR="$COMFY_DIR/models"
 
+# Log persistent im Workspace sichern
 LOG="/workspace/comfyui_setup.log"
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=== $(date) Starting High-Speed Setup ==="
 
 # ------------------------------------------------------------
-# 1. ComfyUI Core zuerst klonen & Verzeichnisse vorbereiten
+# 1. ComfyUI Core zuerst klonen & Verzeichnisstruktur anlegen
 # ------------------------------------------------------------
 echo "--> Klone / Aktualisiere ComfyUI Core..."
 if [ ! -d "$COMFY_DIR/.git" ]; then
@@ -27,11 +28,10 @@ else
     (cd "$COMFY_DIR" && git pull)
 fi
 
-# Ordnerstruktur vollständig vorbereiten
 mkdir -p "$MODELS_DIR"/{checkpoints,vae,clip,loras,upscale_models,insightface/models,wav2lip,sadtalker,liveportrait,gfpgan,facexlib,diffusion_models}
 
 # ------------------------------------------------------------
-# 2. Download-Helfer
+# 2. Download-Helfer (aria2c mit curl-Fallback)
 # ------------------------------------------------------------
 fast_download() {
     local target="$1"
@@ -55,10 +55,10 @@ fast_download() {
 }
 
 # ------------------------------------------------------------
-# 3. Parallel-Task A: Modell-Downloads starten
+# 3. Parallel-Task A: Modell-Downloads im Hintergrund
 # ------------------------------------------------------------
 download_models_background() {
-    echo "--> [Background] Starte Modell-Downloads..."
+    echo "--> [Background] Starte parallele Modell-Downloads..."
 
     # Wav2Lip
     fast_download "$MODELS_DIR/wav2lip/wav2lip.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
@@ -96,12 +96,12 @@ download_models_background() {
     echo "✓ [Background] Alle Modell-Downloads abgeschlossen."
 }
 
-# Startet Modell-Downloads im Hintergrund
+# Modell-Downloads asynchron starten
 download_models_background &
 DOWNLOAD_PID=$!
 
 # ------------------------------------------------------------
-# 4. Parallel-Task B: Nodes & uv-Installation
+# 4. Parallel-Task B: Nodes clonen & Python-Dependencies bauen
 # ------------------------------------------------------------
 echo "--> Installiere uv Package-Manager..."
 pip install --no-cache-dir -q uv
@@ -126,7 +126,6 @@ for name in "${!REPOS[@]}"; do
     fi
 done
 
-# Warte AUSSCHLIESSLICH auf die Git-Prozesse, nicht auf tee
 if [ ${#CLONE_PIDS[@]} -gt 0 ]; then
     wait "${CLONE_PIDS[@]}"
 fi
@@ -142,10 +141,22 @@ uv pip install -r "$COMFY_DIR/requirements.txt"
 for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] && uv pip install -r "$req" || true
 done
-uv pip install scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+
+# Spezifische Fixes: InsightFace/ONNX Runtime & Versions-Pins
+uv pip install insightface onnxruntime scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 
 # ------------------------------------------------------------
-# 5. Synchronisation
+# 5. BasicsR torchvision-Patch
+# ------------------------------------------------------------
+echo "--> Wende BasicsR Degradations-Patch an..."
+BASICSR_DEGRADATIONS=$(python3 -c 'import basicsr, os; print(os.path.join(os.path.dirname(basicsr.__file__), "data", "degradations.py"))' 2>/dev/null || true)
+if [ -n "$BASICSR_DEGRADATIONS" ] && [ -f "$BASICSR_DEGRADATIONS" ]; then
+    sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|g' "$BASICSR_DEGRADATIONS"
+    echo "✓ BasicsR erfolgreich gepatcht."
+fi
+
+# ------------------------------------------------------------
+# 6. Synchronisation
 # ------------------------------------------------------------
 echo "--> Warte auf Fertigstellung der Modell-Downloads..."
 wait "$DOWNLOAD_PID"
