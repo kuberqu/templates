@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# High-Speed ComfyUI Setup Script (uv + aria2c + Parallelism)
+# High-Speed ComfyUI Setup Script (with Runtime Patches & Verification)
 # Repository: kuberqu/templates/runpod/setup.sh
 # ============================================================
 set -euo pipefail
@@ -11,14 +11,13 @@ BASE_DIR="/workspace"
 COMFY_DIR="$BASE_DIR/ComfyUI"
 MODELS_DIR="$COMFY_DIR/models"
 
-# Log persistent im Workspace sichern
 LOG="/workspace/comfyui_setup.log"
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=== $(date) Starting High-Speed Setup ==="
 
 # ------------------------------------------------------------
-# 1. ComfyUI Core zuerst klonen & Verzeichnisstruktur anlegen
+# 1. ComfyUI Core zuerst klonen & Ordner anlegen
 # ------------------------------------------------------------
 echo "--> Klone / Aktualisiere ComfyUI Core..."
 if [ ! -d "$COMFY_DIR/.git" ]; then
@@ -58,7 +57,7 @@ fast_download() {
 # 3. Parallel-Task A: Modell-Downloads im Hintergrund
 # ------------------------------------------------------------
 download_models_background() {
-    echo "--> [Background] Starte parallele Modell-Downloads..."
+    echo "--> [Background] Starte Modell-Downloads..."
 
     # Wav2Lip
     fast_download "$MODELS_DIR/wav2lip/wav2lip.pth" "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
@@ -101,7 +100,7 @@ download_models_background &
 DOWNLOAD_PID=$!
 
 # ------------------------------------------------------------
-# 4. Parallel-Task B: Nodes clonen & Python-Dependencies bauen
+# 4. Parallel-Task B: Nodes clonen & Python-Dependencies
 # ------------------------------------------------------------
 echo "--> Installiere uv Package-Manager..."
 pip install --no-cache-dir -q uv
@@ -130,7 +129,7 @@ if [ ${#CLONE_PIDS[@]} -gt 0 ]; then
     wait "${CLONE_PIDS[@]}"
 fi
 
-# SadTalker requirements patchen
+# SadTalker requirements anpassen
 if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
     sed -i 's/==/>=/g' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
     sed -i '/numpy/d' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
@@ -142,23 +141,86 @@ for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] && uv pip install -r "$req" || true
 done
 
-# Spezifische Fixes: InsightFace/ONNX Runtime & Versions-Pins
-uv pip install insightface onnxruntime scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+# [Patch 1] Fehlende Face-Libs, Soundfile & Version-Pins
+uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 
 # ------------------------------------------------------------
-# 5. BasicsR torchvision-Patch
+# 5. Runtime Patches (BasicsR, Wav2Lip, SadTalker)
 # ------------------------------------------------------------
-echo "--> Wende BasicsR Degradations-Patch an..."
+echo "--> Wende Runtime-Patches an..."
+
+# [Patch 2] BasicsR torchvision >= 0.17 Fix
 BASICSR_DEGRADATIONS=$(python3 -c 'import basicsr, os; print(os.path.join(os.path.dirname(basicsr.__file__), "data", "degradations.py"))' 2>/dev/null || true)
 if [ -n "$BASICSR_DEGRADATIONS" ] && [ -f "$BASICSR_DEGRADATIONS" ]; then
     sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|g' "$BASICSR_DEGRADATIONS"
-    echo "✓ BasicsR erfolgreich gepatcht."
+    echo "✓ BasicsR Degradations gepatcht."
+fi
+
+# [Patch 3] Wav2Lip torchaudio / soundfile Fix
+W2L_NODE="$NODES_DIR/ComfyUI_wav2lip/wav2lip.py"
+if [ -f "$W2L_NODE" ]; then
+    python3 -c '
+path = "'"$W2L_NODE"'"
+with open(path, "r") as f:
+    code = f.read()
+old = "torchaudio.save(temp_audio_path, waveform_tensor, sample_rate)"
+new = "import soundfile as _sf\n            _sf.write(temp_audio_path, waveform_tensor.squeeze(0).cpu().numpy(), sample_rate)"
+if old in code:
+    with open(path, "w") as f:
+        f.write(code.replace(old, new))
+'
+    echo "✓ Wav2Lip Soundfile-Export gepatcht."
+fi
+
+# [Patch 4] SadTalker ShowVideo extra_pnginfo None-Fix
+SHOWVIDEO="$NODES_DIR/Comfyui-SadTalker/nodes/ShowVideo.py"
+if [ -f "$SHOWVIDEO" ]; then
+    sed -i 's|if unique_id and extra_pnginfo and "workflow" in extra_pnginfo\[0\]:|if unique_id and extra_pnginfo and isinstance(extra_pnginfo[0], dict) and "workflow" in extra_pnginfo[0]:|' "$SHOWVIDEO"
+    echo "✓ ShowVideo API-Modus gepatcht."
 fi
 
 # ------------------------------------------------------------
-# 6. Synchronisation
+# 6. Synchronisation & Model-Links
 # ------------------------------------------------------------
 echo "--> Warte auf Fertigstellung der Modell-Downloads..."
 wait "$DOWNLOAD_PID"
+
+# Symlinks setzen (damit der Test-Start die Nodes sofort findet)
+mkdir -p "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints" "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints"
+ln -sf "$MODELS_DIR"/wav2lip/* "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints/" 2>/dev/null || true
+ln -sf "$MODELS_DIR"/sadtalker/* "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints/" 2>/dev/null || true
+ln -sfn "$MODELS_DIR/liveportrait" "$NODES_DIR/ComfyUI-LivePortrait/pretrained_weights" 2>/dev/null || true
+ln -sfn "$MODELS_DIR/insightface" "$NODES_DIR/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
+
+# ------------------------------------------------------------
+# 7. [Patch 5] Verifikation via Test-Start
+# ------------------------------------------------------------
+echo "--> Starte temporäre Node-Verifikation..."
+python3 "$COMFY_DIR/main.py" --listen 127.0.0.1 --port 8188 > /dev/null 2>&1 &
+TEST_PID=$!
+
+# Warte max. 30s auf ComfyUI
+for i in {1..30}; do
+    if curl -s http://127.0.0.1:8188/object_info >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+# Node-Prüfung ausführen
+curl -sf -m 10 http://127.0.0.1:8188/object_info | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+
+# Prüfe alle vorhandenen LipSync-Kerne (optional erweiterbar um WanInfiniteTalkToVideo)
+required = ['Wav2Lip', 'SadTalker', 'LivePortraitProcess']
+missing = [n for n in required if n not in data]
+if missing:
+    sys.exit(f'FEHLER: LipSync-Nodes fehlen im Server-Index: {missing}')
+print('✓ Alle Kern-LipSync-Nodes erfolgreich verifiziert:', required)
+"
+
+# Test-Prozess sauber beenden
+kill -9 "$TEST_PID" 2>/dev/null || true
 
 echo "=== SETUP ERFOLGREICH BEENDET ==="
