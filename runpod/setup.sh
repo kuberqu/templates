@@ -17,7 +17,7 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date) Starting High-Speed Setup ==="
 
 # ------------------------------------------------------------
-# 1. ComfyUI Core zuerst klonen & Verzeichnisstruktur anlegen
+# 1. ComfyUI Core klonen & Ordner vorbereiten
 # ------------------------------------------------------------
 echo "--> Klone / Aktualisiere ComfyUI Core..."
 if [ ! -d "$COMFY_DIR/.git" ]; then
@@ -30,7 +30,7 @@ fi
 mkdir -p "$MODELS_DIR"/{checkpoints,vae,clip,loras,upscale_models,insightface/models,wav2lip,sadtalker,liveportrait,gfpgan,facexlib,diffusion_models}
 
 # ------------------------------------------------------------
-# 2. Download-Helfer (aria2c mit curl-Fallback)
+# 2. Download-Helfer (aria2c mit Fallback auf curl)
 # ------------------------------------------------------------
 fast_download() {
     local target="$1"
@@ -95,12 +95,11 @@ download_models_background() {
     echo "✓ [Background] Alle Modell-Downloads abgeschlossen."
 }
 
-# Downloads im Hintergrund starten
 download_models_background &
 DOWNLOAD_PID=$!
 
 # ------------------------------------------------------------
-# 4. Parallel-Task B: Nodes clonen & Python-Dependencies
+# 4. Parallel-Task B: Custom Nodes & Python-Pakete via uv
 # ------------------------------------------------------------
 echo "--> Installiere uv Package-Manager..."
 pip install --no-cache-dir -q uv
@@ -125,12 +124,10 @@ for name in "${!REPOS[@]}"; do
     fi
 done
 
-# Gezielte Synchronisation nur für die Git-Prozesse
 if [ ${#CLONE_PIDS[@]} -gt 0 ]; then
     wait "${CLONE_PIDS[@]}"
 fi
 
-# SadTalker requirements anpassen
 if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
     sed -i 's/==/>=/g' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
     sed -i '/numpy/d' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
@@ -142,7 +139,6 @@ for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] && uv pip install -r "$req" || true
 done
 
-# Fixes: InsightFace, ONNX, Soundfile & Version-Pins
 uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 
 # ------------------------------------------------------------
@@ -150,12 +146,9 @@ uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<
 # ------------------------------------------------------------
 echo "--> Wende Runtime-Patches an..."
 
-# BasicsR torchvision >= 0.17 Fix
-BASICSR_DEGRADATIONS=$(python3 -c 'import basicsr, os; print(os.path.join(os.path.dirname(basicsr.__file__), "data", "degradations.py"))' 2>/dev/null || true)
-if [ -n "$BASICSR_DEGRADATIONS" ] && [ -f "$BASICSR_DEGRADATIONS" ]; then
-    sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|g' "$BASICSR_DEGRADATIONS"
-    echo "✓ BasicsR Degradations gepatcht."
-fi
+# BasicsR torchvision Fix (direkt über Dateisystem ohne Python-Import)
+find /workspace/venv -path "*/basicsr/data/degradations.py" -exec sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|g' {} + 2>/dev/null || true
+echo "✓ BasicsR Degradations gepatcht."
 
 # Wav2Lip torchaudio / soundfile Fix
 W2L_NODE="$NODES_DIR/ComfyUI_wav2lip/wav2lip.py"
