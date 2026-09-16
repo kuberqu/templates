@@ -49,7 +49,10 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v aria2c >/dev/null 2>&1 ||
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         git curl wget aria2 ffmpeg unzip build-essential python3-venv \
         btop ncdu duf bat nvtop \
-        libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1 || true
+        libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libasound2t64 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 \
+        fonts-liberation libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1 || true
 
     if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
         ln -sf /usr/bin/batcat /usr/local/bin/bat
