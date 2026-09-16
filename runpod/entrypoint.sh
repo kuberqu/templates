@@ -71,7 +71,7 @@ source "$VENV_DIR/bin/activate"
 grep -qF "/workspace/venv/bin/activate" /root/.bashrc || echo "source /workspace/venv/bin/activate" >> /root/.bashrc
 
 # ------------------------------------------------------------
-# 4. Erstinstallation via nachgeladenem setup.sh / Fast-Repair
+# 4. Erstinstallation via setup.sh / Fast-Repair nach Reset
 # ------------------------------------------------------------
 if [ ! -d "$COMFY_DIR" ] || [ ! -f "$MODELS_DIR/wav2lip/s3fd-619a316847.pth" ]; then
     echo "--> Lade setup.sh von GitHub nach..."
@@ -94,10 +94,7 @@ echo "--> Workspace intakt. Führe Fast-Boot aus..."
 # ------------------------------------------------------------
 # 5. Laufzeit-Patches & Symlinks prüfen
 # ------------------------------------------------------------
-BASICSR_DEG=$(python3 -c "import basicsr, os; print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))" 2>/dev/null || true)
-if [ -n "$BASICSR_DEG" ] && [ -f "$BASICSR_DEG" ]; then
-    sed -i "s/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/g" "$BASICSR_DEG"
-fi
+find /workspace/venv -path "*/basicsr/data/degradations.py" -exec sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|g' {} + 2>/dev/null || true
 
 WAV2LIP_PATH="$COMFY_DIR/custom_nodes/ComfyUI_wav2lip"
 SADTALKER_PATH="$COMFY_DIR/custom_nodes/Comfyui-SadTalker"
@@ -123,9 +120,9 @@ sleep 1
 nohup python3 "$COMFY_DIR/main.py" --listen 0.0.0.0 --port 8188 > /workspace/comfyui_server.log 2>&1 &
 SERVER_PID=$!
 
-echo "--> Warte auf Serverbereitschaft (max. 90s)..."
+echo "--> Warte auf Serverbereitschaft (max. 180s für Migrationen)..."
 SERVER_READY=false
-for i in {1..90}; do
+for i in {1..180}; do
     if curl -s -f http://127.0.0.1:8188/object_info >/dev/null 2>&1; then
         SERVER_READY=true
         break
@@ -134,7 +131,7 @@ for i in {1..90}; do
 done
 
 if [ "$SERVER_READY" = false ]; then
-    echo "FEHLER: Server antwortet nach 90s nicht. Letzte Logs:"
+    echo "FEHLER: Server antwortet nach 180s nicht. Letzte Logs:"
     tail -n 30 /workspace/comfyui_server.log
     exit 1
 fi
