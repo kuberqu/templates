@@ -6,7 +6,6 @@
 set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
 
-# URL zu deinem ausgelagerten Setup-Skript
 SETUP_URL="https://raw.githubusercontent.com/kuberqu/templates/main/runpod/setup.sh"
 
 DEFAULT_SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... deinkey@beispiel"
@@ -44,7 +43,7 @@ if ! curl -s -I --connect-timeout 2 https://github.com >/dev/null 2>&1; then
     echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 fi
 
-if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v btop >/dev/null 2>&1 || ! dpkg -s libgl1 >/dev/null 2>&1; then
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v aria2c >/dev/null 2>&1 || ! dpkg -s libgl1 >/dev/null 2>&1; then
     echo "--> Installiere Basis- & Monitoring-Pakete (apt)..."
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
@@ -52,7 +51,6 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v btop >/dev/null 2>&1 || !
         btop ncdu duf bat \
         libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1 || true
 
-    # batcat als 'bat' verlinken
     if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
         ln -sf /usr/bin/batcat /usr/local/bin/bat
     fi
@@ -73,7 +71,7 @@ source "$VENV_DIR/bin/activate"
 grep -qF "/workspace/venv/bin/activate" /root/.bashrc || echo "source /workspace/venv/bin/activate" >> /root/.bashrc
 
 # ------------------------------------------------------------
-# 4. Erstinstallation via nachgeladenem setup.sh
+# 4. Erstinstallation via nachgeladenem setup.sh / Fast-Repair
 # ------------------------------------------------------------
 if [ ! -d "$COMFY_DIR" ] || [ ! -f "$MODELS_DIR/wav2lip/s3fd-619a316847.pth" ]; then
     echo "--> Lade setup.sh von GitHub nach..."
@@ -81,20 +79,20 @@ if [ ! -d "$COMFY_DIR" ] || [ ! -f "$MODELS_DIR/wav2lip/s3fd-619a316847.pth" ]; 
     chmod +x /workspace/setup.sh
     echo "--> Starte Erstinstallation..."
     /bin/bash /workspace/setup.sh
-elif ! python3 -c "import alembic, sqlalchemy, scipy" >/dev/null 2>&1; then
+elif ! python3 -c "import alembic, sqlalchemy, scipy, insightface, soundfile" >/dev/null 2>&1; then
     echo "--> Fehlende Pakete nach Reset erkannt. Repariere via uv..."
     pip install --no-cache-dir -q uv
     uv pip install -r "$COMFY_DIR/requirements.txt"
     for req in "$COMFY_DIR"/custom_nodes/*/requirements.txt; do
         [ -f "$req" ] && uv pip install -r "$req" || true
     done
-    uv pip install scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+    uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 fi
 
 echo "--> Workspace intakt. Führe Fast-Boot aus..."
 
 # ------------------------------------------------------------
-# 5. Laufzeit-Patches & Symlinks
+# 5. Laufzeit-Patches & Symlinks prüfen
 # ------------------------------------------------------------
 BASICSR_DEG=$(python3 -c "import basicsr, os; print(os.path.join(os.path.dirname(basicsr.__file__), 'data', 'degradations.py'))" 2>/dev/null || true)
 if [ -n "$BASICSR_DEG" ] && [ -f "$BASICSR_DEG" ]; then
@@ -116,14 +114,44 @@ GFPGAN_DIR=$(python3 -c "import gfpgan, os; print(os.path.dirname(gfpgan.__file_
 [ -n "$GFPGAN_DIR" ] && mkdir -p "$GFPGAN_DIR/weights" && ln -sf "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "$GFPGAN_DIR/weights/" 2>/dev/null || true
 
 # ------------------------------------------------------------
-# 6. Server Start
+# 6. Server Start & Live-Verifikation
 # ------------------------------------------------------------
 echo "=== Starte ComfyUI Server ==="
-pkill -f "python.*main.py" || true
+pkill -9 -f "python.*main.py" 2>/dev/null || true
+sleep 1
 
-if [ "${RUN_IN_BACKGROUND:-false}" = "true" ]; then
-    nohup python3 "$COMFY_DIR/main.py" --listen 0.0.0.0 --port 8188 > /workspace/comfyui_server.log 2>&1 &
-    echo "✓ ComfyUI läuft im Hintergrund (Port 8188)."
-else
-    exec python3 "$COMFY_DIR/main.py" --listen 0.0.0.0 --port 8188
+nohup python3 "$COMFY_DIR/main.py" --listen 0.0.0.0 --port 8188 > /workspace/comfyui_server.log 2>&1 &
+SERVER_PID=$!
+
+echo "--> Warte auf Serverbereitschaft (max. 90s)..."
+SERVER_READY=false
+for i in {1..90}; do
+    if curl -s -f http://127.0.0.1:8188/object_info >/dev/null 2>&1; then
+        SERVER_READY=true
+        break
+    fi
+    sleep 1
+done
+
+if [ "$SERVER_READY" = false ]; then
+    echo "FEHLER: Server antwortet nach 90s nicht. Letzte Logs:"
+    tail -n 30 /workspace/comfyui_server.log
+    exit 1
+fi
+
+echo "--> Verifiziere LipSync-Nodes..."
+curl -s -f http://127.0.0.1:8188/object_info | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+required = ['Wav2Lip', 'SadTalker', 'LivePortraitProcess']
+missing = [n for n in required if n not in data]
+if missing:
+    sys.exit(f'WARNUNG: Folgende Nodes wurden nicht registriert: {missing}')
+print('✓ Alle Kern-LipSync-Nodes erfolgreich geladen:', required)
+"
+
+echo "✓ ComfyUI läuft stabil auf Port 8188."
+
+if [ "${RUN_IN_BACKGROUND:-false}" != "true" ]; then
+    wait "$SERVER_PID"
 fi
