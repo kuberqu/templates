@@ -134,6 +134,12 @@ if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
 fi
 
 echo "--> Installiere Python-Abhängigkeiten via uv..."
+# Torch auf CUDA 12.8 pinnen (Driver im Template = 570.195.03, max. CUDA 12.8)
+uv pip install \
+    "torch==2.9.0+cu128" \
+    "torchvision==0.24.0+cu128" \
+    "torchaudio==2.9.0+cu128" \
+    --extra-index-url https://download.pytorch.org/whl/cu128
 uv pip install -r "$COMFY_DIR/requirements.txt"
 for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] && uv pip install -r "$req" || true
