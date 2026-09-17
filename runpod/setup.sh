@@ -501,19 +501,30 @@ phase_ok "Checkpoint-Symlinks"
 # ------------------------------------------------------------
 step "7. Verifikation ComfyUI-Stack"
 
-# Smoke-/Test-Skripte bereitstellen (siehe runpod/commands.md) — non-fatal, einzeln.
-# Cache-Buster: raw.githubusercontent.com liefert frisch gepushte Dateien sonst
-# bis zu ein paar Minuten aus dem CDN-Cache.
-for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
-    if curl -fsSL -k --retry 3 --connect-timeout 15 \
-        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t?t=$(date +%s)" \
-        -o "/workspace/$t" 2>/dev/null; then
-        chmod +x "/workspace/$t" 2>/dev/null || true
-        echo "   $t bereitgestellt"
-    else
-        c_warn "$t konnte nicht geladen werden (non-fatal)"
-    fi
-done
+# Test-/Diagnose-Skripte bereitstellen — non-fatal.
+# NICHT über raw.githubusercontent.com: das liefert mit cache-control: max-age=300
+# bis zu 5 Minuten den alten Stand (Query-Strings als Cache-Buster wirkungslos).
+# codeload.github.com liefert immer aktuell (Repo-Tarball, hier ~30 KB).
+step "Test-Skripte aktualisieren"
+TARBALL_URL="https://codeload.github.com/kuberqu/templates/tar.gz/refs/heads/main"
+TMPD=$(mktemp -d)
+if curl -fsSL -k --retry 3 --retry-delay 2 --connect-timeout 15 -o "$TMPD/repo.tgz" "$TARBALL_URL" 2>/dev/null; then
+    for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
+        if tar -xzOf "$TMPD/repo.tgz" "templates-main/runpod/$t" > "$TMPD/$t" 2>/dev/null && [ -s "$TMPD/$t" ]; then
+            case "$t" in
+                *.py) "$VENV/bin/python" -m py_compile "$TMPD/$t" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen"; continue; } ;;
+                *.sh) bash -n "$TMPD/$t" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen"; continue; } ;;
+            esac
+            cp "$TMPD/$t" "/workspace/$t" && chmod +x "/workspace/$t" 2>/dev/null || true
+            echo "   $t bereitgestellt"
+        else
+            c_warn "$t nicht im Tarball gefunden (non-fatal)"
+        fi
+    done
+else
+    c_warn "codeload nicht erreichbar — Test-Skripte bleiben auf altem Stand"
+fi
+rm -rf "$TMPD"
 
 if "$VENV/bin/python" - <<'PYEOF'
 import sys

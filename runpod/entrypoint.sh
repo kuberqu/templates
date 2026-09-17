@@ -22,7 +22,11 @@ set -uo pipefail
 export GIT_TERMINAL_PROMPT=0
 export DEBIAN_FRONTEND=noninteractive
 
-SETUP_URL="https://raw.githubusercontent.com/kuberqu/templates/main/runpod/setup.sh"
+# Hinweis: Setup-/Test-Skripte werden NICHT über raw.githubusercontent.com geholt
+# (CDN mit max-age=300 liefert bis zu 5 Minuten den alten Stand, Query-Strings als
+# Cache-Buster werden ignoriert). Stattdessen codeload-Tarball, Fallback GitHub-API
+# — siehe Schritt "Skripte aktualisieren" weiter unten.
+REPO_TARBALL="https://codeload.github.com/kuberqu/templates/tar.gz/refs/heads/main"
 
 BASE_DIR="/workspace"
 VENV_DIR="$BASE_DIR/venv"
@@ -146,35 +150,82 @@ nodes_ok() {
     [ -d "$NODES_DIR/ComfyUI-LivePortrait" ] && [ -d "$NODES_DIR/ComfyUI_wav2lip" ] && [ -d "$NODES_DIR/Comfyui-SadTalker" ]
 }
 
-# setup.sh IMMER frisch holen (lokale Kopie bleibt als Fallback erhalten)
+# ------------------------------------------------------------
+# Skripte aktualisieren
+# WICHTIG: NICHT mehr über raw.githubusercontent.com! Das liefert mit
+#   cache-control: max-age=300   (x-cache: HIT, via: varnish)
+# bis zu 5 Minuten lang den ALTEN Stand, und Query-Strings als Cache-Buster
+# werden ignoriert -> ein Boot kurz nach einem Push lief schon mit veraltetem
+# setup.sh. codeload.github.com liefert dagegen immer den aktuellen Stand
+# (komplettes Repo als Tarball, hier nur ~30 KB, ein einziger Request).
+# ------------------------------------------------------------
+REPO_TARBALL="${REPO_TARBALL:-https://codeload.github.com/kuberqu/templates/tar.gz/refs/heads/main}"
+
+fetch_repo_files() {
+    # Holt alle runpod-Dateien frisch und legt sie in $1 ab. 0 = Erfolg.
+    local dest="$1" tmpdir tarball f ok=0
+    tmpdir=$(mktemp -d) || return 1
+    tarball="$tmpdir/repo.tgz"
+    if ! curl -fsSL -k --retry 3 --retry-delay 2 --connect-timeout 15 -o "$tarball" "$REPO_TARBALL" 2>/dev/null; then
+        rm -rf "$tmpdir"; return 1
+    fi
+    for f in setup.sh boot_report.sh test_lp_smoke.py test_lipsync_smokes.py \
+             test_lp_retargeting.py om_talking_head.py presenter_example.srt commands.md; do
+        if tar -xzOf "$tarball" "templates-main/runpod/$f" > "$tmpdir/$f" 2>/dev/null && [ -s "$tmpdir/$f" ]; then
+            ok=$((ok + 1))
+        else
+            rm -f "$tmpdir/$f"
+        fi
+    done
+    if [ "$ok" -eq 0 ]; then rm -rf "$tmpdir"; return 1; fi
+    mv "$tmpdir"/* "$dest"/ 2>/dev/null || true
+    rm -rf "$tmpdir"
+    return 0
+}
+
+# Fallback 1: GitHub-API pro Datei (auch nicht CDN-gecacht, aber 60 Req/h)
+fetch_via_api() {  # $1 = Dateiname, $2 = Ziel
+    curl -fsSL -k --retry 2 --connect-timeout 15 \
+        -H 'Accept: application/vnd.github.raw' \
+        "https://api.github.com/repos/kuberqu/templates/contents/runpod/$1?ref=main" \
+        -o "$2" 2>/dev/null && [ -s "$2" ]
+}
+
 step "Skripte aktualisieren"
-# Cache-Buster: raw.githubusercontent.com liefert frisch gepushte Dateien sonst
-# bis zu ein paar Minuten aus dem CDN-Cache (schon einmal Ursache eines Boot-Fehlers).
-CACHEBUST="t=$(date +%s)"
-if curl -f -k -L --connect-timeout 15 -o /tmp/setup.sh.new "$SETUP_URL?$CACHEBUST" 2>/dev/null; then
-    bash -n /tmp/setup.sh.new 2>/dev/null && mv /tmp/setup.sh.new "$BASE_DIR/setup.sh" \
-        && c_ok "setup.sh von GitHub aktualisiert ($(wc -l < "$BASE_DIR/setup.sh") Zeilen)"
+STAGE=$(mktemp -d)
+if fetch_repo_files "$STAGE"; then
+    c_ok "Repo-Tarball geholt (codeload, immer aktuell)"
 else
-    if [ -f "$BASE_DIR/setup.sh" ]; then
-        c_warn "Download fehlgeschlagen — nutze vorhandene setup.sh ($(wc -l < "$BASE_DIR/setup.sh") Zeilen)"
+    c_warn "codeload nicht erreichbar — versuche GitHub-API"
+    if fetch_via_api setup.sh "$STAGE/setup.sh"; then
+        c_ok "setup.sh via GitHub-API geholt"
     else
-        c_err "Keine setup.sh verfügbar!"
+        c_warn "Auch die API nicht erreichbar — behalte vorhandene Skripte"
     fi
 fi
-chmod +x "$BASE_DIR/setup.sh" 2>/dev/null || true
 
-# Diagnose-/Test-Skripte ebenfalls aktuell halten (Syntaxprüfung vor dem Ersetzen)
-for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
-    if curl -fsSL -k --retry 3 --connect-timeout 15 \
-        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t?$CACHEBUST" -o "/tmp/$t.new" 2>/dev/null; then
-        case "$t" in
-            *.py) "$VENV_DIR/bin/python" -m py_compile "/tmp/$t.new" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
-            *.sh) bash -n "/tmp/$t.new" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
-        esac
-        mv "/tmp/$t.new" "$BASE_DIR/$t" && chmod +x "$BASE_DIR/$t" 2>/dev/null || true
-    fi
+# setup.sh nur ersetzen, wenn sie syntaktisch heil ist
+if [ -s "$STAGE/setup.sh" ] && bash -n "$STAGE/setup.sh" 2>/dev/null; then
+    cp "$STAGE/setup.sh" "$BASE_DIR/setup.sh" && chmod +x "$BASE_DIR/setup.sh"
+    c_ok "setup.sh aktualisiert ($(wc -l < "$BASE_DIR/setup.sh") Zeilen)"
+elif [ -f "$BASE_DIR/setup.sh" ]; then
+    c_warn "setup.sh nicht aktualisiert — nutze vorhandene ($(wc -l < "$BASE_DIR/setup.sh") Zeilen)"
+else
+    c_err "Keine setup.sh verfügbar!"
+fi
+
+# Diagnose-/Test-Skripte installieren (mit Syntaxprüfung, sonst alte behalten)
+for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py \
+         om_talking_head.py presenter_example.srt commands.md; do
+    [ -s "$STAGE/$t" ] || continue
+    case "$t" in
+        *.py) "$VENV_DIR/bin/python" -m py_compile "$STAGE/$t" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
+        *.sh) bash -n "$STAGE/$t" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
+    esac
+    cp "$STAGE/$t" "$BASE_DIR/$t" && chmod +x "$BASE_DIR/$t" 2>/dev/null || true
 done
-c_ok "Diagnose-/Test-Skripte aktualisiert (boot_report.sh, Smokes)"
+rm -rf "$STAGE"
+c_ok "Diagnose-/Test-Skripte aktuell (boot_report.sh, Smokes, om_talking_head.py, commands.md)"
 
 step "Zustandsprüfung"
 NEED_SETUP=0
