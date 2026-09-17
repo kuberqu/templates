@@ -295,8 +295,10 @@ ln -sfn "$MODELS_DIR/insightface"  "$NODES_DIR/ComfyUI-LivePortrait/insightface"
 # facexlib/gfpgan suchen ihre Weights im venv-Paketordner UND relativ zum CWD
 # (ComfyUI startet mit cwd=/workspace -> /workspace/gfpgan/weights). Beide Pfade
 # verlinken, sonst lädt SadTalker bei jedem frischen Volume ~290 MB nach.
-FACEXLIB_DIR=$("$VENV_DIR/bin/python" -c "import facexlib, os; print(os.path.dirname(facexlib.__file__))" 2>/dev/null || true)
-GFPGAN_DIR=$("$VENV_DIR/bin/python" -c "import gfpgan, os; print(os.path.dirname(gfpgan.__file__))" 2>/dev/null || true)
+# Pfade direkt aus dem Dateisystem (ein `python -c "import facexlib"` importiert
+# torch/opencv und kostet zig Sekunden für zwei Symlinks)
+FACEXLIB_DIR=$(ls -d "$VENV_DIR"/lib/python*/site-packages/facexlib 2>/dev/null | head -1)
+GFPGAN_DIR=$(ls -d "$VENV_DIR"/lib/python*/site-packages/gfpgan 2>/dev/null | head -1)
 if [ -n "$FACEXLIB_DIR" ]; then
     mkdir -p "$FACEXLIB_DIR/weights" && ln -sf "$MODELS_DIR"/facexlib/* "$FACEXLIB_DIR/weights/" 2>/dev/null || true
 fi

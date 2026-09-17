@@ -396,23 +396,48 @@ else
     phase_fail "ComfyUI requirements.txt"
 fi
 
-step "4b. Node-Requirements (non-fatal pro Node)"
+step "4b. Node-Requirements (gebündelt, gefiltert)"
+# EINE Installation statt einer pro Node: jede Einzel-Installation löst das
+# komplette Environment (~150 Pakete) neu auf und prüft es -> 5x Overhead.
+# Filter pro Node (beides gemessen bzw. verifiziert):
+#   Comfyui-SadTalker  : 'gradio' raus (nur für SadTalkers eigene Web-UI, zieht
+#                        fastapi/uvicorn/…), '==' -> '>=', numpy raus
+#   ComfyUI-LivePortrait: 'onnxruntime-gpu' raus — wir nutzen das CPU-Wheel aus
+#                        dem Pin-Satz, das -gpu-Wheel (235 MB) wurde bisher
+#                        geladen und danach wieder ersetzt
+MERGED_REQ=/tmp/req_all_nodes.txt
+: > "$MERGED_REQ"
 for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] || continue
     node_name=$(basename "$(dirname "$req")")
-    # SadTalker: harte ==-Pins und numpy-Zeilen entfernen (kollidieren mit torch/cu128-Stack)
-    tmp_req="/tmp/req_${node_name}.txt"
-    if [ "$node_name" = "Comfyui-SadTalker" ]; then
-        sed 's/==/>=/g' "$req" | grep -viE '^\s*numpy' > "$tmp_req"
-    else
-        cp "$req" "$tmp_req"
-    fi
-    if uv_install -r "$tmp_req"; then
-        phase_ok "req: $node_name"
-    else
-        phase_fail "req: $node_name"
-    fi
+    {
+        echo "# --- $node_name ---"
+        case "$node_name" in
+            Comfyui-SadTalker)    sed 's/==/>=/g' "$req" | grep -viE '^\s*numpy|^\s*gradio' ;;
+            ComfyUI-LivePortrait) grep -viE '^\s*onnxruntime-gpu' "$req" ;;
+            *)                    cat "$req" ;;
+        esac
+    } >> "$MERGED_REQ"
 done
+if uv_install -r "$MERGED_REQ"; then
+    phase_ok "Node-Requirements gebündelt ($(grep -cve '^#' "$MERGED_REQ") Zeilen)"
+else
+    c_warn "gebündelte Installation fehlgeschlagen — Fallback: pro Node (isoliert)"
+    for req in "$NODES_DIR"/*/requirements.txt; do
+        [ -f "$req" ] || continue
+        node_name=$(basename "$(dirname "$req")")
+        case "$node_name" in
+            Comfyui-SadTalker)    sed 's/==/>=/g' "$req" | grep -viE '^\s*numpy|^\s*gradio' > "/tmp/req_$node_name.txt" ;;
+            ComfyUI-LivePortrait) grep -viE '^\s*onnxruntime-gpu' "$req" > "/tmp/req_$node_name.txt" ;;
+            *)                    cp "$req" "/tmp/req_$node_name.txt" ;;
+        esac
+        if uv_install -r "/tmp/req_$node_name.txt"; then
+            phase_ok "req: $node_name"
+        else
+            phase_fail "req: $node_name"
+        fi
+    done
+fi
 
 # ------------------------------------------------------------
 # 4c. PIN-SATZ ZULETZT — überschreibt alles, was Node-Requirements
@@ -489,8 +514,10 @@ ln -sf "$MODELS_DIR"/sadtalker/* "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpo
 ln -sfn "$MODELS_DIR/liveportrait" "$NODES_DIR/ComfyUI-LivePortrait/pretrained_weights" 2>/dev/null || true
 ln -sfn "$MODELS_DIR/insightface"  "$NODES_DIR/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
 
-FACEXLIB_DIR=$(/workspace/venv/bin/python -c "import facexlib, os; print(os.path.dirname(facexlib.__file__))" 2>/dev/null || true)
-GFPGAN_DIR=$(/workspace/venv/bin/python -c "import gfpgan, os; print(os.path.dirname(gfpgan.__file__))" 2>/dev/null || true)
+# Pfade direkt aus dem Dateisystem bestimmen: ein `python -c "import facexlib"`
+# importiert torch/opencv und kostete in der Messung ~130s — für zwei Symlinks.
+FACEXLIB_DIR=$(ls -d "$VENV"/lib/python*/site-packages/facexlib 2>/dev/null | head -1)
+GFPGAN_DIR=$(ls -d "$VENV"/lib/python*/site-packages/gfpgan 2>/dev/null | head -1)
 if [ -n "$FACEXLIB_DIR" ]; then
     mkdir -p "$FACEXLIB_DIR/weights" && ln -sf "$MODELS_DIR"/facexlib/* "$FACEXLIB_DIR/weights/" 2>/dev/null || true
 fi
