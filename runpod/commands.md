@@ -13,18 +13,39 @@
 - Der Fehler ist in **keiner** committeten Version des Skripts enthalten
   (alle bestehen `bash -n`) — es war eine unvollständig geschriebene Datei.
 
+⛔ **Zusätzlich:** `raw.githubusercontent.com` liefert `cache-control: max-age=300`
+(`x-cache: HIT`, `via: 1.1 varnish`) — also **bis zu 5 Minuten den alten Stand**,
+und ein Query-String als Cache-Buster wird ignoriert (gemessen vom Pod aus).
+Ein Boot direkt nach einem Push lief dadurch schon mit veraltetem `setup.sh`.
+Deshalb holen `entrypoint.sh` und `setup.sh` ihre Skripte jetzt über
+**codeload.github.com** (Repo-Tarball, ~30 KB, immer aktuell, 1 Request);
+Fallback ist die GitHub-API, danach bleiben die vorhandenen Dateien.
+
 **Deshalb: Download auf Temp-Datei, Syntaxprüfung, erst dann ersetzen.**
 
 ```bash
 bash -c "([ -f /start.sh ] && /start.sh &); exec >> /workspace/boot.log 2>&1; echo '=== Pod Boot ==='; sleep 2; \
 EP=/workspace/entrypoint.sh; \
-curl -fsSL --retry 5 --retry-connrefused --connect-timeout 15 https://raw.githubusercontent.com/kuberqu/templates/main/runpod/entrypoint.sh -o /tmp/entrypoint.sh.new && bash -n /tmp/entrypoint.sh.new && mv /tmp/entrypoint.sh.new $EP && chmod +x $EP \
+curl -fsSL --retry 5 --retry-connrefused --connect-timeout 15 'https://codeload.github.com/kuberqu/templates/tar.gz/refs/heads/main' -o /tmp/repo.tgz \
+  && tar -xzOf /tmp/repo.tgz templates-main/runpod/entrypoint.sh > /tmp/entrypoint.sh.new \
+  && bash -n /tmp/entrypoint.sh.new && mv /tmp/entrypoint.sh.new $EP && chmod +x $EP \
   || echo 'WARNUNG: entrypoint.sh Download/Syntaxcheck fehlgeschlagen - nutze vorhandene Version'; \
 RUN_IN_BACKGROUND=true bash $EP; sleep infinity"
 ```
 
 Fallback: existiert `$EP` schon (persistentes `/workspace`), läuft bei
 Download-Problemen die vorhandene Version weiter — kein toter Boot mehr.
+
+## Boot eines Pods prüfen (ein Befehl)
+
+```bash
+bash /workspace/boot_report.sh            # Struktur, Status, Dauer
+bash /workspace/boot_report.sh --smoke    # zusätzlich LivePortrait-Render (~40s)
+```
+Exit 0 = alles grün. Prüft: Boot-Modus/Dauer (`boot_mode`, `boot_seconds`,
+`server_ready_seconds`), fehlgeschlagene setup-Phasen, genau **einen**
+ComfyUI-Prozess, HTTP 200, Node-Registrierung, Python-Importe inkl.
+`mediapipe.framework.formats`, OpenMontage-Registry + staticFile-Patch.
 
 ## Manuelle Diagnose auf dem Pod
 
