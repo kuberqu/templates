@@ -60,10 +60,16 @@ exec > >(tee -a "$LOG") 2>&1
 c_ok()   { printf '\033[32m✓ %s\033[0m\n' "$*"; }
 c_warn() { printf '\033[33m⚠ %s\033[0m\n' "$*"; }
 c_err()  { printf '\033[31m✗ %s\033[0m\n' "$*"; }
-step()   { printf '\n=== %s ===\n' "$*"; }
 
-phase_ok()   { PHASE_RESULTS+=("OK   $1"); c_ok "$1"; }
-phase_fail() { PHASE_RESULTS+=("FAIL $1"); FAILED_PHASES+=("$1"); c_err "$1"; }
+# ---- Zeitmessung (macht Boot-Tests vergleichbar) ----------------------------
+T0=$(date +%s)
+STEP_START=$T0
+dur()   { echo "$(( $(date +%s) - ${1:-$T0} ))"; }
+step()  { STEP_START=$(date +%s); printf '\n=== %s ===\n' "$*"; }
+
+# PHASE_RESULTS-Einträge: "OK|<sekunden>|<label>" bzw. "FAIL|<sekunden>|<label>"
+phase_ok()   { local s=${2:-$(( $(date +%s) - STEP_START ))}; PHASE_RESULTS+=("OK|$s|$1");   c_ok  "$1 (${s}s)"; }
+phase_fail() { local s=${2:-$(( $(date +%s) - STEP_START ))}; PHASE_RESULTS+=("FAIL|$s|$1"); FAILED_PHASES+=("$1"); c_err "$1 (${s}s)"; }
 
 # non-fatal ausführen: verbose_fail "Beschreibung" cmd args...
 nf() {
@@ -93,6 +99,121 @@ find_uv() {
 # uv-Install IMMER gegen den ComfyUI-venv — unabhängig von VIRTUAL_ENV
 uv_install() {
     "$UV_BIN" pip install --python "$VENV/bin/python" "$@"
+}
+
+# ------------------------------------------------------------
+# OpenMontage-Installation — läuft PARALLEL im Hintergrund (Start in Phase 3b).
+# Isoliert in Sub-Shell ohne VIRTUAL_ENV: `make setup` würde sonst in den
+# ComfyUI-venv installieren (das Makefile bevorzugt ein gesetztes VIRTUAL_ENV)
+# und numpy/torch zerschießen.
+# ------------------------------------------------------------
+install_openmontage() {
+    (
+        set -uo pipefail
+        # Komplett von der ComfyUI-Umgebung entkoppeln
+        unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT CONDA_PREFIX CONDA_DEFAULT_ENV PYTHONPATH PYTHONHOME
+        export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        export DEBIAN_FRONTEND=noninteractive
+
+        # 8a. Systempakete für Remotion/Chromium (sonst: libnspr4.so fehlt, exit 127)
+        CHROME_LIBS="libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2
+                     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1
+                     libasound2t64 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 fonts-liberation"
+        if ! dpkg -s libnspr4 >/dev/null 2>&1; then
+            apt-get update -qq >/dev/null 2>&1 || true
+            apt-get install -y -qq $CHROME_LIBS >/dev/null 2>&1 \
+                && echo "✓ Chromium-Systemlibs installiert" \
+                || echo "⚠ Chromium-Systemlibs: apt-Install fehlgeschlagen"
+        else
+            echo "✓ Chromium-Systemlibs vorhanden"
+        fi
+
+        # 8b. Node.js 22 (Remotion/HyperFrames brauchen modernes Node)
+        if ! command -v node >/dev/null 2>&1 || [ "$(node -v | sed 's/v\([0-9]*\).*/\1/')" -lt 20 ]; then
+            curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh 2>/dev/null \
+                && bash /tmp/nodesource_setup.sh >/dev/null 2>&1 \
+                && apt-get install -y -qq nodejs >/dev/null 2>&1 \
+                && echo "✓ Node $(node -v) installiert" \
+                || echo "⚠ Node 22 Installation fehlgeschlagen"
+        else
+            echo "✓ Node $(node -v) vorhanden"
+        fi
+
+        # 8c. Clone (idempotent)
+        [ -d "$OM_DIR/.git" ] || git clone --depth=1 https://github.com/calesthio/OpenMontage.git "$OM_DIR" \
+            || { echo "✗ OpenMontage-Clone fehlgeschlagen"; exit 1; }
+
+        # 8c2. Bekannter OM-Bug (verifiziert 17.09.): remotion_caption_burn setzt
+        #      videoSrc mit "public/"-Präfix, aber Remotions staticFile() VERBIETET
+        #      dieses Präfix -> TalkingHead-Render bricht mit
+        #      "Do not include the public/ prefix when using staticFile()" ab.
+        CB="$OM_DIR/tools/video/remotion_caption_burn.py"
+        if [ -f "$CB" ] && grep -q 'public/talking-head/{video_filename}' "$CB"; then
+            sed -i 's|public/talking-head/{video_filename}|talking-head/{video_filename}|' "$CB"
+            echo "✓ caption-burn staticFile-Patch angewendet"
+        else
+            echo "✓ caption-burn staticFile-Patch nicht nötig (schon gefixt)"
+        fi
+
+        cd "$OM_DIR" || exit 1
+
+        # 8d. Eigener venv EXPLIZIT mit uv (nicht "das aktive venv"!)
+        if [ ! -x "$OM_DIR/.venv/bin/python" ]; then
+            "$UV_BIN" venv --python 3.10 "$OM_DIR/.venv" || { echo "✗ OM-venv fehlgeschlagen"; exit 1; }
+        fi
+        echo "✓ OM-venv: $("$OM_DIR/.venv/bin/python" -V)"
+
+        # 8e. make setup — doppelt abgesichert: Umgebung entkoppelt UND VENV_DIR gesetzt.
+        #     Läuft parallel zu den ComfyUI-Installationen -> bei Netz-/Cache-Konkurrenz
+        #     gibt es einen zweiten Versuch.
+        if [ ! -d "$OM_DIR/remotion-composer/node_modules" ] || [ ! -f "$OM_DIR/.om_installed" ]; then
+            if ! make setup VENV_DIR="$OM_DIR/.venv"; then
+                echo "⚠ make setup fehlgeschlagen — zweiter Versuch"
+                make setup VENV_DIR="$OM_DIR/.venv" || echo "⚠ make setup mit Fehlern beendet (siehe oben)"
+            fi
+            # Nur als installiert markieren, wenn node_modules wirklich da ist
+            [ -d "$OM_DIR/remotion-composer/node_modules" ] && touch "$OM_DIR/.om_installed"
+        else
+            echo "✓ OM-Abhängigkeiten bereits installiert"
+        fi
+
+        # 8f. Fehlende Runtime-Deps (make setup installiert sie NICHT)
+        "$UV_BIN" pip install --python "$OM_DIR/.venv/bin/python" -q aiohttp pydub edge-tts piper-tts \
+            && echo "✓ aiohttp/pydub/edge-tts/piper-tts" \
+            || echo "⚠ OM Runtime-Deps fehlgeschlagen"
+
+        # 8g. Piper-Voice (1.8.x: --download-dir existiert nicht mehr -> --data-dir)
+        "$OM_DIR/.venv/bin/python" -m piper.download_voices en_US-lessac-medium --data-dir /root/.piper/voices >/dev/null 2>&1 \
+            && echo "✓ Piper-Voice en_US-lessac-medium" \
+            || echo "⚠ Piper-Voice Download fehlgeschlagen"
+
+        # 8h. .env: COMFYUI auf den lokalen Server zeigen lassen (idempotent)
+        [ -f "$OM_DIR/.env" ] || cp "$OM_DIR/.env.example" "$OM_DIR/.env" 2>/dev/null || true
+        export OM_DIR
+        "$OM_DIR/.venv/bin/python" - <<'PYEOF' || echo "⚠ .env-Anpassung fehlgeschlagen"
+import re, os
+p = os.path.join(os.environ.get("OM_DIR", "/workspace/OpenMontage"), ".env")
+src = open(p).read()
+def setvar(src, name, val):
+    pat = re.compile(r"^([ \t]*#?[ \t]*" + name + r"=).*$", re.M)
+    if pat.search(src):
+        return pat.sub(name + "=" + val, src)
+    return src.rstrip() + "\n" + name + "=" + val + "\n"
+for n in ("COMFYUI_SERVER_URL", "COMFYUI_VIDEO_SERVER_URL"):
+    src = setvar(src, n, "http://127.0.0.1:8188")
+open(p, "w").write(src)
+print("✓ .env: COMFYUI-URLs = http://127.0.0.1:8188")
+PYEOF
+
+        # 8i. Verifikation OM
+        "$OM_DIR/.venv/bin/python" -c "import aiohttp, pydub, edge_tts; print('✓ OM Runtime-Deps OK')" \
+            || echo "⚠ OM Runtime-Deps-Verifikation fehlgeschlagen"
+        echo "hello" | "$OM_DIR/.venv/bin/piper" -m en_US-lessac-medium --data-dir /root/.piper/voices -f /tmp/piper_check.wav >/dev/null 2>&1 \
+            && { echo "✓ Piper TTS OK"; rm -f /tmp/piper_check.wav; } \
+            || echo "⚠ Piper-TTS-Test fehlgeschlagen"
+        exit 0
+    ) 2>&1 | sed 's/^/    [OM] /'
+    return "${PIPESTATUS[0]}"
 }
 
 # ------------------------------------------------------------
@@ -226,6 +347,22 @@ for d in "$NODES_DIR"/*/; do
 done
 [ "$count" -eq 0 ] && node_names="keine"
 phase_ok "$count Custom-Nodes: $node_names"
+
+# ------------------------------------------------------------
+# 3b. OpenMontage PARALLEL im Hintergrund starten
+#     Eigener venv, eigene Umgebung -> kann den ComfyUI-venv nicht anfassen.
+#     Läuft während der kompletten Python-Installation (Phase 4) mit, statt
+#     wie früher erst danach. Ergebnis wird in Phase 8 abgeholt.
+# ------------------------------------------------------------
+OM_PID=""
+OM_START=$(date +%s)
+if [ "${INSTALL_OPENMONTAGE:-1}" = "1" ]; then
+    install_openmontage &
+    OM_PID=$!
+    c_ok "OpenMontage-Installation parallel gestartet (pid $OM_PID) — läuft im Hintergrund"
+else
+    c_warn "OpenMontage übersprungen (INSTALL_OPENMONTAGE != 1)"
+fi
 # SadTalker-Requirements anpassen? Original-Repo NICHT verändern (git pull-Konflikt),
 # stattdessen gefilterte Kopie im /tmp verwenden -> siehe Phase 4b.
 
@@ -437,116 +574,22 @@ else
 fi
 
 # ------------------------------------------------------------
-# 8. OpenMontage — ISOLIERT (Sub-Shell, ohne VIRTUAL_ENV!)
-#    Kritisch: `make setup` würde sonst in den ComfyUI-venv installieren,
-#    weil das Makefile ein gesetztes VIRTUAL_ENV bevorzugt.
+# 8. OpenMontage — Ergebnis des PARALLEL gestarteten Hintergrund-Laufs (Phase 3b)
 # ------------------------------------------------------------
-step "8. OpenMontage (isoliert)"
+step "8. OpenMontage (Ergebnis des Parallel-Laufs)"
 if [ "${INSTALL_OPENMONTAGE:-1}" != "1" ]; then
     c_warn "OpenMontage übersprungen (INSTALL_OPENMONTAGE != 1)"
+elif [ -n "${OM_PID:-}" ]; then
+    if wait "$OM_PID"; then
+        phase_ok "OpenMontage (parallel)" "$(( $(date +%s) - OM_START ))"
+    else
+        rc=$?
+        phase_fail "OpenMontage (parallel, rc=$rc)" "$(( $(date +%s) - OM_START ))"
+    fi
 else
-    (
-        set -uo pipefail
-        # Komplett von der ComfyUI-Umgebung entkoppeln
-        unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT CONDA_PREFIX CONDA_DEFAULT_ENV PYTHONPATH PYTHONHOME
-        export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        export DEBIAN_FRONTEND=noninteractive
-
-        # 8a. Systempakete für Remotion/Chromium (sonst: libnspr4.so fehlt, exit 127)
-        CHROME_LIBS="libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2
-                     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1
-                     libasound2t64 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 fonts-liberation"
-        if ! dpkg -s libnspr4 >/dev/null 2>&1; then
-            apt-get update -qq >/dev/null 2>&1 || true
-            apt-get install -y -qq $CHROME_LIBS >/dev/null 2>&1 \
-                && echo "✓ Chromium-Systemlibs installiert" \
-                || echo "⚠ Chromium-Systemlibs: apt-Install fehlgeschlagen"
-        else
-            echo "✓ Chromium-Systemlibs vorhanden"
-        fi
-
-        # 8b. Node.js 22 (Remotion/HyperFrames brauchen modernes Node)
-        if ! command -v node >/dev/null 2>&1 || [ "$(node -v | sed 's/v\([0-9]*\).*/\1/')" -lt 20 ]; then
-            curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh 2>/dev/null \
-                && bash /tmp/nodesource_setup.sh >/dev/null 2>&1 \
-                && apt-get install -y -qq nodejs >/dev/null 2>&1 \
-                && echo "✓ Node $(node -v) installiert" \
-                || echo "⚠ Node 22 Installation fehlgeschlagen"
-        else
-            echo "✓ Node $(node -v) vorhanden"
-        fi
-
-        # 8c. Clone (idempotent)
-        [ -d "$OM_DIR/.git" ] || git clone --depth=1 https://github.com/calesthio/OpenMontage.git "$OM_DIR" \
-            || { echo "✗ OpenMontage-Clone fehlgeschlagen"; exit 1; }
-
-        # 8c2. Bekannter OM-Bug (verifiziert 17.09.): remotion_caption_burn setzt
-        #      videoSrc mit "public/"-Präfix, aber Remotions staticFile() VERBIETET
-        #      dieses Präfix -> TalkingHead-Render bricht mit
-        #      "Do not include the public/ prefix when using staticFile()" ab.
-        CB="$OM_DIR/tools/video/remotion_caption_burn.py"
-        if [ -f "$CB" ] && grep -q 'public/talking-head/{video_filename}' "$CB"; then
-            sed -i 's|public/talking-head/{video_filename}|talking-head/{video_filename}|' "$CB"
-            echo "✓ caption-burn staticFile-Patch angewendet"
-        else
-            echo "✓ caption-burn staticFile-Patch nicht nötig (schon gefixt)"
-        fi
-
-        cd "$OM_DIR" || exit 1
-
-        # 8d. Eigener venv EXPLIZIT mit uv (nicht "das aktive venv"!)
-        if [ ! -x "$OM_DIR/.venv/bin/python" ]; then
-            "$UV_BIN" venv --python 3.10 "$OM_DIR/.venv" || { echo "✗ OM-venv fehlgeschlagen"; exit 1; }
-        fi
-        echo "✓ OM-venv: $("$OM_DIR/.venv/bin/python" -V)"
-
-        # 8e. make setup — doppelt abgesichert: Umgebung entkoppelt UND VENV_DIR gesetzt
-        if [ ! -d "$OM_DIR/remotion-composer/node_modules" ] || [ ! -f "$OM_DIR/.om_installed" ]; then
-            make setup VENV_DIR="$OM_DIR/.venv" && touch "$OM_DIR/.om_installed" \
-                || echo "⚠ make setup mit Fehlern beendet (siehe oben)"
-        else
-            echo "✓ OM-Abhängigkeiten bereits installiert"
-        fi
-
-        # 8f. Fehlende Runtime-Deps (make setup installiert sie NICHT)
-        "$UV_BIN" pip install --python "$OM_DIR/.venv/bin/python" -q aiohttp pydub edge-tts piper-tts \
-            && echo "✓ aiohttp/pydub/edge-tts/piper-tts" \
-            || echo "⚠ OM Runtime-Deps fehlgeschlagen"
-
-        # 8g. Piper-Voice (1.8.x: --download-dir existiert nicht mehr -> --data-dir)
-        "$OM_DIR/.venv/bin/python" -m piper.download_voices en_US-lessac-medium --data-dir /root/.piper/voices >/dev/null 2>&1 \
-            && echo "✓ Piper-Voice en_US-lessac-medium" \
-            || echo "⚠ Piper-Voice Download fehlgeschlagen"
-
-        # 8h. .env: COMFYUI auf den lokalen Server zeigen lassen (idempotent)
-        [ -f "$OM_DIR/.env" ] || cp "$OM_DIR/.env.example" "$OM_DIR/.env" 2>/dev/null || true
-        export OM_DIR
-        "$OM_DIR/.venv/bin/python" - <<'PYEOF' || echo "⚠ .env-Anpassung fehlgeschlagen"
-import re, os
-p = os.path.join(os.environ.get("OM_DIR", "/workspace/OpenMontage"), ".env")
-src = open(p).read()
-def setvar(src, name, val):
-    pat = re.compile(r"^([ \t]*#?[ \t]*" + name + r"=).*$", re.M)
-    if pat.search(src):
-        return pat.sub(name + "=" + val, src)
-    return src.rstrip() + "\n" + name + "=" + val + "\n"
-for n in ("COMFYUI_SERVER_URL", "COMFYUI_VIDEO_SERVER_URL"):
-    src = setvar(src, n, "http://127.0.0.1:8188")
-open(p, "w").write(src)
-print("✓ .env: COMFYUI-URLs = http://127.0.0.1:8188")
-PYEOF
-
-        # 8i. Verifikation OM
-        "$OM_DIR/.venv/bin/python" -c "import aiohttp, pydub, edge_tts; print('✓ OM Runtime-Deps OK')" \
-            || echo "⚠ OM Runtime-Deps-Verifikation fehlgeschlagen"
-        echo "hello" | "$OM_DIR/.venv/bin/piper" -m en_US-lessac-medium --data-dir /root/.piper/voices -f /tmp/piper_check.wav >/dev/null 2>&1 \
-            && { echo "✓ Piper TTS OK"; rm -f /tmp/piper_check.wav; } \
-            || echo "⚠ Piper-TTS-Test fehlgeschlagen"
-        exit 0
-    ) 2>&1 | sed 's/^/    [OM] /'
-    OM_RC=${PIPESTATUS[0]}
-    [ "$OM_RC" = "0" ] && phase_ok "OpenMontage" || phase_fail "OpenMontage (rc=$OM_RC)"
+    c_warn "OpenMontage wurde nicht gestartet (OM_PID leer)"
 fi
+
 
 # ------------------------------------------------------------
 # 9. Sicherheitsnetz: ComfyUI-Pins erneut erzwingen
@@ -568,25 +611,33 @@ fi
 # 10. Zusammenfassung + Statusfile für entrypoint.sh
 # ------------------------------------------------------------
 step "10. Zusammenfassung"
+TOTAL=$(dur "$T0")
 for r in "${PHASE_RESULTS[@]}"; do
-    case "$r" in
-        OK*)   c_ok   "${r#OK   }" ;;
-        FAIL*) c_err  "${r#FAIL }" ;;
-    esac
+    IFS='|' read -r st secs label <<< "$r"
+    if [ "$st" = "OK" ]; then c_ok "$label (${secs}s)"; else c_err "$label (${secs}s)"; fi
 done
 
+echo
+echo "--- Laufzeit ---"
+for r in "${PHASE_RESULTS[@]}"; do
+    IFS='|' read -r st secs label <<< "$r"
+    printf '%6ss  %s\n' "$secs" "$label"
+done | sort -rn | head -5 | sed 's/^/  langsamste Phase: /' || true
+printf '  GESAMT: %s Min %ss (%s Phasen)\n' "$((TOTAL / 60))" "$((TOTAL % 60))" "${#PHASE_RESULTS[@]}"
+
 printf '%s\n' "${FAILED_PHASES[@]}" > /tmp/setup_failed_phases.txt
-"$VENV/bin/python" - "$STATUS_FILE" /tmp/setup_failed_phases.txt <<'PYEOF' 2>/dev/null || true
+"$VENV/bin/python" - "$STATUS_FILE" /tmp/setup_failed_phases.txt "$TOTAL" <<'PYEOF' 2>/dev/null || true
 import json, sys, datetime
-path, listfile = sys.argv[1], sys.argv[2]
+path, listfile, total = sys.argv[1], sys.argv[2], int(sys.argv[3])
 failed = [l.strip() for l in open(listfile) if l.strip()]
 with open(path, "w") as f:
     json.dump({
         "finished_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "duration_seconds": total,
         "failed_phases": failed,
         "ok": not failed,
     }, f, indent=2)
-print(f"Status geschrieben: {path} (ok={not failed})")
+print(f"Status geschrieben: {path} (ok={not failed}, {total}s)")
 PYEOF
 
 if [ ${#FAILED_PHASES[@]} -eq 0 ]; then

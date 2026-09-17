@@ -43,6 +43,10 @@ c_warn() { printf '\033[33m⚠ %s\033[0m\n' "$*"; }
 c_err()  { printf '\033[31m✗ %s\033[0m\n' "$*"; }
 step()   { printf '\n--- %s ---\n' "$*"; }
 
+# Zeitmessung: macht Boot-Tests vergleichbar (Fast-Boot vs. Volleinrichtung)
+BOOT_T0=$(date +%s)
+dur() { echo "$(( $(date +%s) - ${1:-$BOOT_T0} ))"; }
+
 echo "=== $(date -u '+%Y-%m-%d %H:%M:%S UTC') Initialisiere Pod-Umgebung ==="
 
 # ------------------------------------------------------------
@@ -165,15 +169,18 @@ if ! venv_ok;    then echo "   Python-Stack unvollständig/inkonsistent (Import-
 
 if [ "$NEED_SETUP" = "1" ]; then
     echo "--> Setup/Reparatur wird ausgeführt (Log: $BASE_DIR/comfyui_setup.log)"
+    SETUP_T0=$(date +%s)
     set +u
     INSTALL_OPENMONTAGE="${INSTALL_OPENMONTAGE:-1}" bash "$BASE_DIR/setup.sh"
     SETUP_RC=$?
     set -u
+    SETUP_SECS=$(dur "$SETUP_T0")
     if [ "$SETUP_RC" = "0" ]; then
-        c_ok "setup.sh erfolgreich (rc=0)"
+        c_ok "setup.sh erfolgreich (rc=0, ${SETUP_SECS}s)"
     else
-        c_warn "setup.sh mit rc=$SETUP_RC beendet — siehe comfyui_setup.log / setup_status.json"
+        c_warn "setup.sh mit rc=$SETUP_RC beendet (${SETUP_SECS}s) — siehe comfyui_setup.log / setup_status.json"
     fi
+    BOOT_MODE="full"
 
     # Gezielte Nachreparatur, falls nur die Pins gekippt sind
     if ! venv_ok; then
@@ -186,6 +193,7 @@ if [ "$NEED_SETUP" = "1" ]; then
     fi
 else
     c_ok "Workspace intakt — Fast-Boot"
+    BOOT_MODE="fast"
 fi
 
 # ------------------------------------------------------------
@@ -278,6 +286,7 @@ SERVER_READY=0
 for i in $(seq 1 300); do
     if curl -sf -m 3 http://127.0.0.1:8188/object_info >/dev/null 2>&1; then
         SERVER_READY=1
+        READY_SECS=$i
         echo "   bereit nach ${i}s"
         break
     fi
@@ -316,9 +325,10 @@ PYEOF
     OM_INFO="-"
     [ -x "$OM_DIR/.venv/bin/python" ] && OM_INFO=$("$OM_DIR/.venv/bin/python" -c "import sys;print('.'.join(map(str,sys.version_info[:3])))" 2>/dev/null || echo "vorhanden")
 
-    "$VENV_DIR/bin/python" - "$STATUS_FILE" "$SERVER_PID" "$GPU_INFO" "$NODES_STATUS" "$OM_INFO" <<'PYEOF' || true
+    "$VENV_DIR/bin/python" - "$STATUS_FILE" "$SERVER_PID" "$GPU_INFO" "$NODES_STATUS" "$OM_INFO" \
+        "$BOOT_MODE" "${READY_SECS:-0}" "$(dur "$BOOT_T0")" <<'PYEOF' || true
 import json, sys, datetime
-path, pid, gpu, nodes, om = sys.argv[1:6]
+path, pid, gpu, nodes, om, mode, ready, total = sys.argv[1:9]
 with open(path, "w") as f:
     json.dump({
         "booted_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -327,6 +337,9 @@ with open(path, "w") as f:
         "gpu": gpu,
         "nodes": nodes,
         "openmontage_python": om,
+        "boot_mode": mode,                    # "full" (setup.sh lief) oder "fast"
+        "server_ready_seconds": int(ready),   # bis ComfyUI antwortet
+        "boot_seconds": int(total),           # entrypoint gesamt
     }, f, indent=2)
 print(f"Status: {path}")
 PYEOF
@@ -335,6 +348,7 @@ PYEOF
     echo "================================================"
     echo " ComfyUI läuft auf Port 8188 — Web-UI via RunPod-Port-Mapping"
     echo " GPU: ${GPU_INFO:-unbekannt}"
+    echo " Boot: ${BOOT_MODE} | Server bereit nach ${READY_SECS:-?}s | entrypoint gesamt $(dur "$BOOT_T0")s"
     echo " Verify: curl -sf http://127.0.0.1:8188/system_stats"
     echo "================================================"
 else
