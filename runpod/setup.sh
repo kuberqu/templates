@@ -145,7 +145,7 @@ for req in "$NODES_DIR"/*/requirements.txt; do
     [ -f "$req" ] && uv pip install -r "$req" || true
 done
 
-uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4" "mediapipe==0.10.21"
 
 # ------------------------------------------------------------
 # 5. Runtime Patches (BasicsR, Wav2Lip, SadTalker)
@@ -192,3 +192,52 @@ ln -sfn "$MODELS_DIR/liveportrait" "$NODES_DIR/ComfyUI-LivePortrait/pretrained_w
 ln -sfn "$MODELS_DIR/insightface" "$NODES_DIR/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
 
 echo "=== SETUP ERFOLGREICH BEENDET ==="
+
+# ComfyUI neu starten damit Patches geladen werden
+pkill -f "ComfyUI/main.py" 2>/dev/null || true
+sleep 2
+cd /workspace && nohup ./venv/bin/python /workspace/ComfyUI/main.py --listen 0.0.0.0 --port 8188 >> /workspace/comfyui_boot.log 2>&1 &
+echo "=== ComfyUI neu gestartet ==="
+
+# ------------------------------------------------------------
+# OpenMontage Installation auf RunPod (nach ComfyUI-Setup)
+# ------------------------------------------------------------
+echo "=== Installiere OpenMontage ==="
+# 7a. Node.js 22 (Remotion/HyperFrames; Template hat keins)
+if ! command -v node >/dev/null 2>&1; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  apt-get install -y nodejs
+fi
+echo "--> Node: $(node --version), npm: $(npm --version)"
+# 7b. Clone (idempotent)
+[ -d "/workspace/OpenMontage/.git" ] || git clone --depth=1 https://github.com/calesthio/OpenMontage.git /workspace/OpenMontage
+# 7c. make setup (venv + requirements + Remotion npm + HyperFrames-npx-Cache)
+cd /workspace/OpenMontage
+if [ ! -x ".venv/bin/python" ] || [ ! -d "remotion-composer/node_modules" ]; then
+  make setup
+fi
+# 7d. MISSING Runtime-Deps (make setup installiert sie NICHT!)
+VIRTUAL_ENV=/workspace/OpenMontage/.venv uv pip install -q aiohttp pydub edge-tts
+# 7e. Piper TTS offline-Voice (1.8: Flag --download-dir gibt es nicht mehr)
+.venv/bin/python -m piper.download_voices en_US-lessac-medium --data-dir /root/.piper/voices
+# 7f. .env — POD-spezifisch (COMFYUI lokal)
+.venv/bin/python - <<'PYEOF'
+import re
+p = ".env"
+src = open(p).read()
+def setvar(src, name, val):
+    pat = re.compile(r"^([ \t]*#?[ \t]*" + name + r"=).*$", re.M)
+    if pat.search(src):
+        return pat.sub(name + "=" + val, src)
+    return src.rstrip() + "\n" + name + "=" + val + "\n"
+src = setvar(src, "COMFYUI_SERVER_URL", "http://127.0.0.1:8188")
+src = setvar(src, "COMFYUI_VIDEO_SERVER_URL", "http://127.0.0.1:8188")
+open(p, "w").write(src)
+print("✓ .env: COMFYUI-URLs gesetzt")
+PYEOF
+# 7g. Verifikation
+.venv/bin/python -c "import aiohttp, pydub, edge_tts; print('✓ OM Runtime-Deps OK')"
+echo "hello" | .venv/bin/piper -m en_US-lessac-medium --data-dir /root/.piper/voices -f /tmp/piper_check.wav && rm -f /tmp/piper_check.wav && echo "✓ Piper TTS OK"
+# System libs for Remotion/Chromium (ohne: libnspr4.so not found, exit 127)
+apt-get install -y libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 fonts-liberation
+echo "=== OpenMontage Setup COMPLETE ==="
