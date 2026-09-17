@@ -480,6 +480,18 @@ else
         [ -d "$OM_DIR/.git" ] || git clone --depth=1 https://github.com/calesthio/OpenMontage.git "$OM_DIR" \
             || { echo "✗ OpenMontage-Clone fehlgeschlagen"; exit 1; }
 
+        # 8c2. Bekannter OM-Bug (verifiziert 17.09.): remotion_caption_burn setzt
+        #      videoSrc mit "public/"-Präfix, aber Remotions staticFile() VERBIETET
+        #      dieses Präfix -> TalkingHead-Render bricht mit
+        #      "Do not include the public/ prefix when using staticFile()" ab.
+        CB="$OM_DIR/tools/video/remotion_caption_burn.py"
+        if [ -f "$CB" ] && grep -q 'public/talking-head/{video_filename}' "$CB"; then
+            sed -i 's|public/talking-head/{video_filename}|talking-head/{video_filename}|' "$CB"
+            echo "✓ caption-burn staticFile-Patch angewendet"
+        else
+            echo "✓ caption-burn staticFile-Patch nicht nötig (schon gefixt)"
+        fi
+
         cd "$OM_DIR" || exit 1
 
         # 8d. Eigener venv EXPLIZIT mit uv (nicht "das aktive venv"!)
