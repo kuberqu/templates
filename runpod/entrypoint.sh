@@ -8,7 +8,7 @@ export GIT_TERMINAL_PROMPT=0
 
 SETUP_URL="https://raw.githubusercontent.com/kuberqu/templates/main/runpod/setup.sh"
 
-DEFAULT_SSH_KEY=*** AAAAC3NzaC1lZDI1NTE5AAAAI... deinkey@beispiel"
+DEFAULT_SSH_KEY="*** AAAAC3NzaC1lZDI1NTE5AAAAI... deinkey@beispiel"
 USER_KEY="${PUBLIC_KEY:-${SSH_PUBLIC_KEY:-$DEFAULT_SSH_KEY}}"
 
 LOG="/workspace/comfyui_boot.log"
