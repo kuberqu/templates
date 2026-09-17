@@ -147,7 +147,7 @@ nodes_ok() {
 }
 
 # setup.sh IMMER frisch holen (lokale Kopie bleibt als Fallback erhalten)
-step "setup.sh aktualisieren"
+step "Skripte aktualisieren"
 if curl -f -k -L --connect-timeout 15 -o /tmp/setup.sh.new "$SETUP_URL" 2>/dev/null; then
     bash -n /tmp/setup.sh.new 2>/dev/null && mv /tmp/setup.sh.new "$BASE_DIR/setup.sh" \
         && c_ok "setup.sh von GitHub aktualisiert ($(wc -l < "$BASE_DIR/setup.sh") Zeilen)"
@@ -159,6 +159,19 @@ else
     fi
 fi
 chmod +x "$BASE_DIR/setup.sh" 2>/dev/null || true
+
+# Diagnose-/Test-Skripte ebenfalls aktuell halten (Syntaxprüfung vor dem Ersetzen)
+for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
+    if curl -fsSL -k --retry 3 --connect-timeout 15 \
+        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t" -o "/tmp/$t.new" 2>/dev/null; then
+        case "$t" in
+            *.py) "$VENV_DIR/bin/python" -m py_compile "/tmp/$t.new" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
+            *.sh) bash -n "/tmp/$t.new" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
+        esac
+        mv "/tmp/$t.new" "$BASE_DIR/$t" && chmod +x "$BASE_DIR/$t" 2>/dev/null || true
+    fi
+done
+c_ok "Diagnose-/Test-Skripte aktualisiert (boot_report.sh, Smokes)"
 
 step "Zustandsprüfung"
 NEED_SETUP=0

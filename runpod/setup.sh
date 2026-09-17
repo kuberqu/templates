@@ -62,14 +62,18 @@ c_warn() { printf '\033[33m⚠ %s\033[0m\n' "$*"; }
 c_err()  { printf '\033[31m✗ %s\033[0m\n' "$*"; }
 
 # ---- Zeitmessung (macht Boot-Tests vergleichbar) ----------------------------
+# PHASE_MARK wird nach JEDER gemeldeten Phase nachgezogen -> jede Phase bekommt
+# ihre EIGENE Dauer, auch wenn mehrere Phasen im selben step-Block laufen.
 T0=$(date +%s)
 STEP_START=$T0
+PHASE_MARK=$T0
 dur()   { echo "$(( $(date +%s) - ${1:-$T0} ))"; }
 step()  { STEP_START=$(date +%s); printf '\n=== %s ===\n' "$*"; }
 
 # PHASE_RESULTS-Einträge: "OK|<sekunden>|<label>" bzw. "FAIL|<sekunden>|<label>"
-phase_ok()   { local s=${2:-$(( $(date +%s) - STEP_START ))}; PHASE_RESULTS+=("OK|$s|$1");   c_ok  "$1 (${s}s)"; }
-phase_fail() { local s=${2:-$(( $(date +%s) - STEP_START ))}; PHASE_RESULTS+=("FAIL|$s|$1"); FAILED_PHASES+=("$1"); c_err "$1 (${s}s)"; }
+phase_mark() { local now; now=$(date +%s); echo "$(( now - PHASE_MARK ))"; PHASE_MARK=$now; }
+phase_ok()   { local s=${2:-$(phase_mark)}; PHASE_RESULTS+=("OK|$s|$1");   c_ok  "$1 (${s}s)"; }
+phase_fail() { local s=${2:-$(phase_mark)}; PHASE_RESULTS+=("FAIL|$s|$1"); FAILED_PHASES+=("$1"); c_err "$1 (${s}s)"; }
 
 # non-fatal ausführen: verbose_fail "Beschreibung" cmd args...
 nf() {
