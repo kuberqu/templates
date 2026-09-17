@@ -148,7 +148,10 @@ nodes_ok() {
 
 # setup.sh IMMER frisch holen (lokale Kopie bleibt als Fallback erhalten)
 step "Skripte aktualisieren"
-if curl -f -k -L --connect-timeout 15 -o /tmp/setup.sh.new "$SETUP_URL" 2>/dev/null; then
+# Cache-Buster: raw.githubusercontent.com liefert frisch gepushte Dateien sonst
+# bis zu ein paar Minuten aus dem CDN-Cache (schon einmal Ursache eines Boot-Fehlers).
+CACHEBUST="t=$(date +%s)"
+if curl -f -k -L --connect-timeout 15 -o /tmp/setup.sh.new "$SETUP_URL?$CACHEBUST" 2>/dev/null; then
     bash -n /tmp/setup.sh.new 2>/dev/null && mv /tmp/setup.sh.new "$BASE_DIR/setup.sh" \
         && c_ok "setup.sh von GitHub aktualisiert ($(wc -l < "$BASE_DIR/setup.sh") Zeilen)"
 else
@@ -163,7 +166,7 @@ chmod +x "$BASE_DIR/setup.sh" 2>/dev/null || true
 # Diagnose-/Test-Skripte ebenfalls aktuell halten (Syntaxprüfung vor dem Ersetzen)
 for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
     if curl -fsSL -k --retry 3 --connect-timeout 15 \
-        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t" -o "/tmp/$t.new" 2>/dev/null; then
+        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t?$CACHEBUST" -o "/tmp/$t.new" 2>/dev/null; then
         case "$t" in
             *.py) "$VENV_DIR/bin/python" -m py_compile "/tmp/$t.new" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;
             *.sh) bash -n "/tmp/$t.new" 2>/dev/null || { c_warn "$t: Syntaxprüfung fehlgeschlagen, behalte alte Version"; continue; } ;;

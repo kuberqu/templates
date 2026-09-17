@@ -501,11 +501,14 @@ phase_ok "Checkpoint-Symlinks"
 # ------------------------------------------------------------
 step "7. Verifikation ComfyUI-Stack"
 
-# Smoke-/Test-Skripte bereitstellen (siehe runpod/commands.md) — non-fatal, einzeln
-for t in test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
+# Smoke-/Test-Skripte bereitstellen (siehe runpod/commands.md) — non-fatal, einzeln.
+# Cache-Buster: raw.githubusercontent.com liefert frisch gepushte Dateien sonst
+# bis zu ein paar Minuten aus dem CDN-Cache.
+for t in boot_report.sh test_lp_smoke.py test_lipsync_smokes.py test_lp_retargeting.py; do
     if curl -fsSL -k --retry 3 --connect-timeout 15 \
-        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t" \
+        "https://raw.githubusercontent.com/kuberqu/templates/main/runpod/$t?t=$(date +%s)" \
         -o "/workspace/$t" 2>/dev/null; then
+        chmod +x "/workspace/$t" 2>/dev/null || true
         echo "   $t bereitgestellt"
     else
         c_warn "$t konnte nicht geladen werden (non-fatal)"
