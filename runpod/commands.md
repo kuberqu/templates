@@ -57,3 +57,28 @@ ls -la /workspace/ComfyUI/output/lp_smoke_*.mp4
 
 Testet die komplette Node-Kette zur Laufzeit — genau der Pfad, der bei
 `mediapipe 1.0.x` mit `ModuleNotFoundError: mediapipe.framework` stirbt.
+
+## Smoke-Tests Wav2Lip + SadTalker (API)
+
+```bash
+/workspace/venv/bin/python /workspace/test_lipsync_smokes.py    # beide, je ~180s
+```
+Voraussetzungen im `input/`-Ordner: `lp_source.jpg` (Gesicht) und `tts_test.wav` (Sprache).
+SadTalker schreibt `<timestamp>.mp4` direkt nach `output/` (kein history-Eintrag).
+
+## H3 → LipSync (YouTube-Tops → Pod)
+
+`h3_lipsync.py` läuft **lokal** und baut selbst den SSH-Tunnel zum Pod:
+
+```bash
+./h3_lipsync.py --h3 ~/workspace/youtube-tops/output/facts_*.mp4 \
+    --face presenter.jpg --start 4 --duration 6 --out /tmp/h3_out.mp4
+./h3_lipsync.py --h3 clip.mp4 --check-only        # nur Face-Check + Modus-Entscheidung
+```
+
+- Modus `direct`: H3-Clip enthält ein Gesicht → Wav2Lip über die H3-Frames.
+- Modus `presenter`: H3-Audio treibt ein Presenter-Bild (Normalfall bei den Facts-Clips,
+  die keine Gesichter enthalten).
+- Ergebnis wird mit der Original-H3-Audiospur gemuxt.
+- Env statt CLI: `LIPSYNC_POD`, `LIPSYNC_PORT`, `LIPSYNC_KEY`.
+
