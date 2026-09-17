@@ -133,19 +133,19 @@ if [ -f "$NODES_DIR/Comfyui-SadTalker/requirements.txt" ]; then
     sed -i '/numpy/d' "$NODES_DIR/Comfyui-SadTalker/requirements.txt"
 fi
 
-echo "--> Installiere Python-Abhängigkeiten via uv (target: /workspace/venv)..."
+echo "--> Installiere Python-Abhängigkeiten via uv..."
 # Torch auf CUDA 12.8 pinnen (Driver im Template = 570.195.03, max. CUDA 12.8)
-/workspace/venv/bin/uv pip install \
+uv pip install \
     "torch==2.9.0+cu128" \
     "torchvision==0.24.0+cu128" \
     "torchaudio==2.9.0+cu128" \
     --extra-index-url https://download.pytorch.org/whl/cu128
-/workspace/venv/bin/uv pip install -r "$COMFY_DIR/requirements.txt"
+uv pip install -r "$COMFY_DIR/requirements.txt"
 for req in "$NODES_DIR"/*/requirements.txt; do
-    [ -f "$req" ] && /workspace/venv/bin/uv pip install -r "$req" || true
+    [ -f "$req" ] && uv pip install -r "$req" || true
 done
 
-/workspace/venv/bin/uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4" "mediapipe==0.10.21"
+uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
 
 # ------------------------------------------------------------
 # 5. Runtime Patches (BasicsR, Wav2Lip, SadTalker)
@@ -192,55 +192,3 @@ ln -sfn "$MODELS_DIR/liveportrait" "$NODES_DIR/ComfyUI-LivePortrait/pretrained_w
 ln -sfn "$MODELS_DIR/insightface" "$NODES_DIR/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
 
 echo "=== SETUP ERFOLGREICH BEENDET ==="
-
-# ------------------------------------------------------------
-# 7. OpenMontage Installation auf RunPod (nach ComfyUI-Setup)
-# ------------------------------------------------------------
-echo "=== Installiere OpenMontage ==="
-# 7a. Node.js 22 (Remotion/HyperFrames; Template hat keins)
-if ! command -v node >/dev/null 2>&1; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y nodejs
-fi
-echo "--> Node: $(node --version), npm: $(npm --version)"
-# 7b. Clone (idempotent)
-[ -d "/workspace/OpenMontage/.git" ] || git clone --depth=1 https://github.com/calesthio/OpenMontage.git /workspace/OpenMontage
-# 7c. make setup (venv + requirements + Remotion npm + HyperFrames-npx-Cache)
-cd /workspace/OpenMontage
-if [ ! -x ".venv/bin/python" ] || [ ! -d "remotion-composer/node_modules" ]; then
-  make setup
-fi
-# 7d. MISSING Runtime-Deps (make setup installiert sie NICHT!)
-VIRTUAL_ENV=/workspace/OpenMontage/.venv /workspace/venv/bin/uv pip install -q aiohttp pydub edge-tts
-# 7e. Piper TTS offline-Voice (1.8: Flag --download-dir gibt es nicht mehr)
-.venv/bin/python -m piper.download_voices en_US-lessac-medium --data-dir /root/.piper/voices
-# 7f. .env — POD-spezifisch (COMFYUI lokal)
-.venv/bin/python - <<'PYEOF'
-import re
-p = ".env"
-src = open(p).read()
-def setvar(src, name, val):
-    pat = re.compile(r"^([ \t]*#?[ \t]*" + name + r"=).*$", re.M)
-    if pat.search(src):
-        return pat.sub(name + "=" + val, src)
-    return src.rstrip() + "\n" + name + "=" + val + "\n"
-src = setvar(src, "COMFYUI_SERVER_URL", "http://127.0.0.1:8188")
-src = setvar(src, "COMFYUI_VIDEO_SERVER_URL", "http://127.0.0.1:8188")
-open(p, "w").write(src)
-print("✓ .env: COMFYUI-URLs gesetzt")
-PYEOF
-# 7g. Verifikation
-.venv/bin/python -c "import aiohttp, pydub, edge_tts; print('✓ OM Runtime-Deps OK')"
-echo "hello" | .venv/bin/piper -m en_US-lessac-medium --data-dir /root/.piper/voices -f /tmp/piper_check.wav && rm -f /tmp/piper_check.wav && echo "✓ Piper TTS OK"
-echo "=== OpenMontage Setup COMPLETE ==="
-
-# ------------------------------------------------------------
-# 8. Finale Verifikation (KEIN ComfyUI-Start hier! entrypoint.sh macht Fast-Boot)
-# ------------------------------------------------------------
-echo "=== Finale Verifikation ==="
-/workspace/venv/bin/python -c "
-import mediapipe
-from mediapipe.framework.formats import landmark_pb2
-print(f'✓ mediapipe {mediapipe.__version__} + framework.formats OK')
-"
-echo "✓ Setup vollständig — ComfyUI-Start übernimmt entrypoint.sh Fast-Boot"
