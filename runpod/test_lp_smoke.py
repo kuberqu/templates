@@ -7,12 +7,36 @@ mediapipe-Cropper (mediapipe 1.0.x bricht erst hier, nicht beim Import).
 Aufruf: /workspace/venv/bin/python /workspace/test_lp_smoke.py [frames]
 """
 import json
+import os
+import shutil
 import sys
 import time
 import urllib.request
 
 API = "http://127.0.0.1:8188"
 FRAMES = int(sys.argv[1]) if len(sys.argv) > 1 else 78
+NODE_ASSETS = "/workspace/ComfyUI/custom_nodes/ComfyUI-LivePortrait/assets/examples"
+INPUT_DIR = "/workspace/ComfyUI/input"
+
+
+def ensure_assets() -> bool:
+    """Frische Pods haben leeres input/ -> Beispiel-Assets aus dem Node-Repo holen.
+
+    Ohne das antwortet ComfyUI auf den Prompt mit HTTP 400
+    ("Invalid image file"/"Invalid video file").
+    """
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    for src, dst in ((f"{NODE_ASSETS}/source/s0.jpg", f"{INPUT_DIR}/lp_source.jpg"),
+                     (f"{NODE_ASSETS}/driving/d0.mp4", f"{INPUT_DIR}/lp_driving.mp4")):
+        if os.path.exists(dst):
+            continue
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            print(f"  asset bereitgestellt: {os.path.basename(dst)}")
+        else:
+            print(f"  FEHLER: Asset fehlt und nicht auffindbar: {src}")
+            return False
+    return True
 
 WORKFLOW = {
     "1": {"class_type": "LoadImage", "inputs": {"image": "lp_source.jpg"}},
@@ -60,6 +84,8 @@ def get(path):
 
 
 if __name__ == "__main__":
+    if not ensure_assets():
+        sys.exit(2)
     print(f"--> Submit LivePortrait-Workflow ({FRAMES} Frames)")
     res = post("/prompt", {"client_id": "lp-smoke", "prompt": WORKFLOW})
     prompt_id = res["prompt_id"]

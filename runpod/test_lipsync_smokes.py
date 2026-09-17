@@ -8,6 +8,7 @@ Voraussetzungen im input-Ordner: lp_source.jpg (Gesicht), tts_test.wav (Sprache)
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -16,7 +17,57 @@ import urllib.request
 API = "http://127.0.0.1:8188"
 FACE = "lp_source.jpg"
 AUDIO = "tts_test.wav"
+NODE_ASSETS = "/workspace/ComfyUI/custom_nodes/ComfyUI-LivePortrait/assets/examples"
+INPUT_DIR = "/workspace/ComfyUI/input"
 RESULTS = {}
+
+
+def ensure_assets() -> bool:
+    """Frische Pods haben leeres input/ -> Beispiel-Assets aus dem Node-Repo holen.
+
+    Ohne das schlägt der Prompt mit HTTP 400 fehl
+    ("Invalid image file", "Invalid video file").
+    """
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    for src, dst in ((f"{NODE_ASSETS}/source/s0.jpg", f"{INPUT_DIR}/{FACE}"),
+                     (f"{NODE_ASSETS}/driving/d0.mp4", f"{INPUT_DIR}/lp_driving.mp4")):
+        if os.path.exists(dst):
+            continue
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            print(f"  asset bereitgestellt: {os.path.basename(dst)}")
+        else:
+            print(f"  FEHLER: Asset fehlt und nicht auffindbar: {src}")
+            return False
+    return True
+
+def ensure_tts_audio() -> bool:
+    """tts_test.wav bei Bedarf erzeugen (edge-tts im OpenMontage-venv)."""
+    dst = f"{INPUT_DIR}/{AUDIO}"
+    if os.path.exists(dst):
+        return True
+    om_bin = "/workspace/OpenMontage/.venv/bin"
+    mp3 = "/tmp/tts_test.mp3"
+    if not os.path.exists(f"{om_bin}/edge-tts"):
+        print("  FEHLER: tts_test.wav fehlt und edge-tts ist nicht vorhanden")
+        return False
+    try:
+        r = subprocess.run([f"{om_bin}/edge-tts", "--voice", "en-US-ChristopherNeural",
+                            "--text", "Hello, this is a test render of the local lip sync pipeline. "
+                                      "One two three four five.",
+                            "--write-media", mp3], capture_output=True, text=True, timeout=240)
+        if r.returncode != 0 or not os.path.exists(mp3):
+            print(f"  FEHLER: edge-tts fehlgeschlagen: {(r.stderr or '')[-200:]}")
+            return False
+        r2 = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp3, "-ar", "16000", "-ac", "1", dst],
+                            capture_output=True, text=True, timeout=180)
+        if r2.returncode == 0 and os.path.exists(dst):
+            print("  tts_test.wav erzeugt (edge-tts, 16 kHz mono)")
+            return True
+    except Exception as e:
+        print(f"  FEHLER: TTS-Erzeugung: {e}")
+    return False
+
 
 WAV2LIP = {
     "1": {"class_type": "LoadImage", "inputs": {"image": FACE}},
@@ -113,6 +164,10 @@ def probe(path):
 
 if __name__ == "__main__":
     print("Health:", get("/system_stats")["system"]["comfyui_version"])
+    if not ensure_assets():
+        sys.exit(2)
+    if not ensure_tts_audio():
+        sys.exit(2)
     tmp_before = set(os.listdir("/workspace/ComfyUI/output"))
     run("Wav2Lip", WAV2LIP)
     run("SadTalker", SADTALKER)

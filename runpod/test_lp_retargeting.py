@@ -10,6 +10,8 @@ und rendert beide. Beweis, dass das Retargeting greift, erfolgt danach außerhal
 Aufruf: /workspace/venv/bin/python /workspace/test_lp_retargeting.py [multiplier]
 """
 import json
+import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -18,6 +20,24 @@ import urllib.request
 API = "http://127.0.0.1:8188"
 FRAMES = 78
 MULT = float(sys.argv[1]) if len(sys.argv) > 1 else 1.5
+NODE_ASSETS = "/workspace/ComfyUI/custom_nodes/ComfyUI-LivePortrait/assets/examples"
+INPUT_DIR = "/workspace/ComfyUI/input"
+
+
+def ensure_assets() -> bool:
+    """Frische Pods haben leeres input/ -> Beispiel-Assets aus dem Node-Repo holen."""
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    for src, dst in ((f"{NODE_ASSETS}/source/s0.jpg", f"{INPUT_DIR}/lp_source.jpg"),
+                     (f"{NODE_ASSETS}/driving/d0.mp4", f"{INPUT_DIR}/lp_driving.mp4")):
+        if os.path.exists(dst):
+            continue
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            print(f"  asset bereitgestellt: {os.path.basename(dst)}")
+        else:
+            print(f"  FEHLER: Asset fehlt und nicht auffindbar: {src}")
+            return False
+    return True
 
 BASE = {
     "1": {"class_type": "LoadImage", "inputs": {"image": "lp_source.jpg"}},
@@ -111,6 +131,8 @@ def run(name: str, workflow: dict) -> str | None:
 
 
 if __name__ == "__main__":
+    if not ensure_assets():
+        sys.exit(2)
     print("Health:", get("/system_stats")["system"]["comfyui_version"])
     base_file = run("baseline", build(False))
     rt_file = run("retarget", build(True))
