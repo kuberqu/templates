@@ -70,10 +70,20 @@ PHASE_MARK=$T0
 dur()   { echo "$(( $(date +%s) - ${1:-$T0} ))"; }
 step()  { STEP_START=$(date +%s); printf '\n=== %s ===\n' "$*"; }
 
-# PHASE_RESULTS-Einträge: "OK|<sekunden>|<label>" bzw. "FAIL|<sekunden>|<label>"
-phase_mark() { local now; now=$(date +%s); echo "$(( now - PHASE_MARK ))"; PHASE_MARK=$now; }
-phase_ok()   { local s=${2:-$(phase_mark)}; PHASE_RESULTS+=("OK|$s|$1");   c_ok  "$1 (${s}s)"; }
-phase_fail() { local s=${2:-$(phase_mark)}; PHASE_RESULTS+=("FAIL|$s|$1"); FAILED_PHASES+=("$1"); c_err "$1 (${s}s)"; }
+# PHASE_RESULTS-Einträge: "OK|<sekunden>|<label>" bzw. "FAIL|<sekunden>|<label>".
+# WICHTIG: mark_now muss als BEFEHL im aktuellen Shell-Kontext laufen — in einer
+# $( )-Substitution ginge die Zuweisung PHASE_MARK=… verloren und alle Phasen
+# meldeten die kumulierte Zeit seit dem Start (real passiert).
+PHASE_DELTA=0
+mark_now() {
+    local now; now=$(date +%s)
+    PHASE_DELTA=$(( now - PHASE_MARK ))
+    PHASE_MARK=$now
+}
+phase_ok()   { if [ -n "${2:-}" ]; then PHASE_DELTA="$2"; else mark_now; fi
+               PHASE_RESULTS+=("OK|$PHASE_DELTA|$1");   c_ok  "$1 (${PHASE_DELTA}s)"; }
+phase_fail() { if [ -n "${2:-}" ]; then PHASE_DELTA="$2"; else mark_now; fi
+               PHASE_RESULTS+=("FAIL|$PHASE_DELTA|$1"); FAILED_PHASES+=("$1"); c_err "$1 (${PHASE_DELTA}s)"; }
 
 # non-fatal ausführen: verbose_fail "Beschreibung" cmd args...
 nf() {
