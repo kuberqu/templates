@@ -257,7 +257,8 @@ def run_workflow(cli: Client, workflow: dict, tag: str, timeout: int = 3600) -> 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="MiniMax-H3-Clip -> LipSync (RunPod ComfyUI)")
-    ap.add_argument("--h3", required=True, help="H3-Clip (mp4, mit Voiceover-Audio)")
+    ap.add_argument("--h3", help="H3-Clip (mp4, mit Voiceover-Audio)")
+    ap.add_argument("--audio", help="Statt H3-Clip: Audio-Datei als Antrieb (nur --mode presenter)")
     ap.add_argument("--face", help="Presenter-Bild (für Modus 'presenter')")
     ap.add_argument("--mode", choices=["auto", "direct", "presenter"], default="auto")
     ap.add_argument("--start", type=float, default=0.0, help="Startzeit im H3-Clip (s)")
@@ -271,10 +272,86 @@ def main() -> int:
     ap.add_argument("--key", default=os.environ.get("LIPSYNC_KEY", "~/.ssh/id_ed25519"))
     args = ap.parse_args()
 
+    if bool(args.h3) == bool(args.audio):
+        print("FEHLER: entweder --h3 <clip.mp4> oder --audio <datei> angeben", file=sys.stderr)
+        return 2
+    if args.audio and not args.face:
+        print("FEHLER: --audio braucht --face <Bild> (Presenter-Modus)", file=sys.stderr)
+        return 2
+
     for tool in ("ffmpeg", "ffprobe", "ssh"):
         if not shutil.which(tool):
             print(f"FEHLT: {tool}", file=sys.stderr)
             return 2
+
+    return run_audio_driven(args) if args.audio else run_clip_driven(args)
+
+
+def run_audio_driven(args) -> int:
+    """Presenter-Render aus einer beliebigen Audio-Datei (kein H3-Clip nötig).
+
+    Damit kann jedes Voiceover (z.B. die Szene-TTS aus dem Composer) ein
+    Presenter-Bild lippensynchron steuern.
+    """
+    if not os.path.isfile(args.audio):
+        print(f"Audio nicht gefunden: {args.audio}", file=sys.stderr)
+        return 2
+    if not os.path.isfile(args.face):
+        print(f"Presenter-Bild nicht gefunden: {args.face}", file=sys.stderr)
+        return 2
+
+    print(f"Audio: {summary(args.audio)}")
+    print(f"Presenter: {args.face}")
+    tmp = tempfile.mkdtemp(prefix="h3lipsync_")
+    tunnel = Tunnel(args.pod, args.port, args.key)
+    try:
+        # Antrieb immer als 16 kHz mono WAV (Wav2Lip-Standard); Original für den Mux behalten
+        drive = os.path.join(tmp, "drive.wav")
+        sh(["ffmpeg", "-v", "error", "-y", "-i", args.audio, "-ar", "16000", "-ac", "1", drive], check=True)
+
+        print(f"--> SSH-Tunnel zu {args.pod}:{args.port} ...", flush=True)
+        port = tunnel.start()
+        cli = Client(port)
+        info = cli.get("/system_stats")["system"]
+        print(f"    ComfyUI {info.get('comfyui_version')} erreichbar (Tunnel-Port {port})")
+
+        remote_drive = os.path.basename(cli.upload(drive))
+        remote_face = os.path.basename(cli.upload(args.face))
+        wf = wf_presenter(remote_face, remote_drive, args.fps, "h3_lipsync")
+
+        print("--> Wav2Lip-Render (presenter, audio-getrieben) gestartet ...", flush=True)
+        stats, files = run_workflow(cli, wf, "presenter")
+        if not files:
+            print("FEHLER: kein Ausgabefile im history-Objekt", file=sys.stderr)
+            return 1
+        raw = os.path.join(tmp, "lipsync_raw.mp4")
+        cli.download(files[0], raw)
+        print(f"    Render fertig in {stats['seconds']}s: {summary(raw)}")
+
+        # Original-Tonspur zurückmuxen (die 16-kHz-Spur ist nur Antrieb)
+        sh(["ffmpeg", "-v", "error", "-y", "-i", raw, "-i", args.audio, "-map", "0:v:0",
+            "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest",
+            args.out], check=True)
+        if not os.path.isfile(args.out):
+            shutil.copy2(raw, args.out)
+        print(f"\nERGEBNIS: {args.out}\n  {summary(args.out)}")
+        print(f"  Modus: presenter | Renderzeit: {stats['seconds']}s")
+        return 0
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg-Fehler: {(e.stderr or '')[-500:]}", file=sys.stderr)
+        return 1
+    except urllib.error.HTTPError as e:
+        print(f"HTTP {e.code}: {e.read().decode()[:600]}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Fehler: {e}", file=sys.stderr)
+        return 1
+    finally:
+        tunnel.stop()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_clip_driven(args) -> int:
     if not os.path.isfile(args.h3):
         print(f"H3-Clip nicht gefunden: {args.h3}", file=sys.stderr)
         return 2
