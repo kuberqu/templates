@@ -179,6 +179,9 @@ download_models_background() {
     fast_download "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth"
     fast_download "$MODELS_DIR/facexlib/detection_Resnet50_Final.pth" "https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth"
     fast_download "$MODELS_DIR/facexlib/parsing_parsenet.pth" "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_parsenet.pth"
+    # alignment_WFLW_4HG wird von SadTalker (facexlib Landmark-Alignment) gebraucht.
+    # Fehlte in der Liste -> facexlib lud beim ersten Render 185 MB nach.
+    fast_download "$MODELS_DIR/facexlib/alignment_WFLW_4HG.pth" "https://github.com/xinntao/facexlib/releases/download/v0.1.0/alignment_WFLW_4HG.pth"
     # LTX-Video + VAE
     fast_download "$MODELS_DIR/diffusion_models/ltx-video-2b-v0.9.5.safetensors" "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors"
     fast_download "$MODELS_DIR/vae/vae-ft-mse-840000-ema-pruned.safetensors" "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors"
@@ -343,6 +346,13 @@ fi
 if [ -n "$GFPGAN_DIR" ]; then
     mkdir -p "$GFPGAN_DIR/weights" && ln -sf "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "$GFPGAN_DIR/weights/" 2>/dev/null || true
 fi
+# WICHTIG: facexlib/gfpgan suchen ihre Weights RELATIV ZUM CWD (ComfyUI läuft mit
+# cwd=/workspace -> /workspace/gfpgan/weights). Nur die venv-Symlinks oben reichen
+# NICHT: dann lädt SadTalker beim ersten Render ~290 MB (alignment 185 MB +
+# detection 104 MB) erneut aus dem Netz.
+mkdir -p "$BASE_DIR/gfpgan/weights"
+ln -sf "$MODELS_DIR"/facexlib/* "$BASE_DIR/gfpgan/weights/" 2>/dev/null || true
+ln -sf "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "$BASE_DIR/gfpgan/weights/" 2>/dev/null || true
 phase_ok "Checkpoint-Symlinks"
 
 # ------------------------------------------------------------

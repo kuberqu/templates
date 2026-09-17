@@ -216,6 +216,21 @@ ln -sf "$MODELS_DIR"/wav2lip/*   "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints
 ln -sf "$MODELS_DIR"/sadtalker/* "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints/" 2>/dev/null || true
 ln -sfn "$MODELS_DIR/liveportrait" "$NODES_DIR/ComfyUI-LivePortrait/pretrained_weights" 2>/dev/null || true
 ln -sfn "$MODELS_DIR/insightface"  "$NODES_DIR/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
+
+# facexlib/gfpgan suchen ihre Weights im venv-Paketordner UND relativ zum CWD
+# (ComfyUI startet mit cwd=/workspace -> /workspace/gfpgan/weights). Beide Pfade
+# verlinken, sonst lädt SadTalker bei jedem frischen Volume ~290 MB nach.
+FACEXLIB_DIR=$("$VENV_DIR/bin/python" -c "import facexlib, os; print(os.path.dirname(facexlib.__file__))" 2>/dev/null || true)
+GFPGAN_DIR=$("$VENV_DIR/bin/python" -c "import gfpgan, os; print(os.path.dirname(gfpgan.__file__))" 2>/dev/null || true)
+if [ -n "$FACEXLIB_DIR" ]; then
+    mkdir -p "$FACEXLIB_DIR/weights" && ln -sf "$MODELS_DIR"/facexlib/* "$FACEXLIB_DIR/weights/" 2>/dev/null || true
+fi
+if [ -n "$GFPGAN_DIR" ]; then
+    mkdir -p "$GFPGAN_DIR/weights" && ln -sf "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "$GFPGAN_DIR/weights/" 2>/dev/null || true
+fi
+mkdir -p "$BASE_DIR/gfpgan/weights"
+ln -sf "$MODELS_DIR"/facexlib/* "$BASE_DIR/gfpgan/weights/" 2>/dev/null || true
+ln -sf "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "$BASE_DIR/gfpgan/weights/" 2>/dev/null || true
 c_ok "Symlinks gesetzt"
 
 # ------------------------------------------------------------
