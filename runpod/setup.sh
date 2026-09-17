@@ -211,8 +211,18 @@ done
 if [ ${#CLONE_PIDS[@]} -gt 0 ]; then
     for p in "${CLONE_PIDS[@]}"; do wait "$p" || phase_fail "Node-Clone (pid $p)"; done
 fi
-count=$(find "$NODES_DIR" -maxdepth 1 -mindepth 1 -type d | wc -l)
-phase_ok "$count Custom-Node-Verzeichnisse vorhanden"
+# Nur echte Node-Repos zählen (custom_nodes/ enthält auch __pycache__ und lose .py-Dateien,
+# die den Zähler sonst verfälschen)
+count=0
+node_names=""
+for d in "$NODES_DIR"/*/; do
+    if [ -e "$d/.git" ]; then
+        count=$((count + 1))
+        node_names="${node_names:+$node_names, }$(basename "$d")"
+    fi
+done
+[ "$count" -eq 0 ] && node_names="keine"
+phase_ok "$count Custom-Nodes: $node_names"
 # SadTalker-Requirements anpassen? Original-Repo NICHT verändern (git pull-Konflikt),
 # stattdessen gefilterte Kopie im /tmp verwenden -> siehe Phase 4b.
 
