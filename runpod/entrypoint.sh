@@ -8,7 +8,7 @@ export GIT_TERMINAL_PROMPT=0
 
 SETUP_URL="https://raw.githubusercontent.com/kuberqu/templates/main/runpod/setup.sh"
 
-DEFAULT_SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... deinkey@beispiel"
+DEFAULT_SSH_KEY=*** AAAAC3NzaC1lZDI1NTE5AAAAI... deinkey@beispiel"
 USER_KEY="${PUBLIC_KEY:-${SSH_PUBLIC_KEY:-$DEFAULT_SSH_KEY}}"
 
 LOG="/workspace/comfyui_boot.log"
@@ -25,38 +25,38 @@ mkdir -p /root/.ssh && chmod 700 /root/.ssh
 touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
 
 if [ -n "$USER_KEY" ] && [[ "$USER_KEY" != *"AAAAC3NzaC1lZDI1NTE5AAAAI..."* ]]; then
-    if ! grep -qF "$USER_KEY" /root/.ssh/authorized_keys; then
-        echo "$USER_KEY" >> /root/.ssh/authorized_keys
-        echo "✓ SSH-Key hinterlegt."
-    fi
+ if ! grep -qF "$USER_KEY" /root/.ssh/authorized_keys; then
+ echo "$USER_KEY" >> /root/.ssh/authorized_keys
+ echo "✓ SSH-Key hinterlegt."
+ fi
 fi
 
 if ! pgrep -x "sshd" >/dev/null 2>&1; then
-    service ssh start >/dev/null 2>&1 || /usr/sbin/sshd >/dev/null 2>&1 || true
-    echo "✓ SSH-Daemon gestartet."
+ service ssh start >/dev/null 2>&1 || /usr/sbin/sshd >/dev/null 2>&1 || true
+ echo "✓ SSH-Daemon gestartet."
 fi
 
 # ------------------------------------------------------------
-# 2. DNS & Flüchtige Systempakete nachinstallieren
+# 2. DNS & Systempakete (inkl. Remotion/Chromium Libs)
 # ------------------------------------------------------------
 if ! curl -s -I --connect-timeout 2 https://github.com >/dev/null 2>&1; then
-    echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
+ echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf
 fi
 
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v aria2c >/dev/null 2>&1 || ! dpkg -s libgl1 >/dev/null 2>&1; then
-    echo "--> Installiere Basis- & Monitoring-Pakete (apt)..."
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        git curl wget aria2 ffmpeg unzip build-essential python3-venv \
-        btop ncdu duf bat nvtop \
-        libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-        libgbm1 libasound2t64 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 \
-        fonts-liberation libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1 || true
+ echo "--> Installiere Basis- & Monitoring-Pakete (apt)..."
+ apt-get update -qq
+ DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+ git curl wget aria2 ffmpeg unzip build-essential python3-venv \
+ btop ncdu duf bat nvtop \
+ libnspr4 libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+ libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+ libgbm1 libasound2t64 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 \
+ fonts-liberation libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 openssh-server >/dev/null 2>&1 || true
 
-    if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
-        ln -sf /usr/bin/batcat /usr/local/bin/bat
-    fi
+ if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+ ln -sf /usr/bin/batcat /usr/local/bin/bat
+ fi
 fi
 
 COMFY_DIR="/workspace/ComfyUI"
@@ -64,94 +64,72 @@ MODELS_DIR="$COMFY_DIR/models"
 VENV_DIR="/workspace/venv"
 
 # ------------------------------------------------------------
-# 3. Persistentes venv aktivieren
+# 3. Persistentes venv aktivieren (OHNE --system-site-packages!)
 # ------------------------------------------------------------
 if [ ! -d "$VENV_DIR" ]; then
-    echo "--> Erstelle persistentes Virtual Environment in $VENV_DIR..."
-    python3 -m venv --system-site-packages "$VENV_DIR"
+ echo "--> Erstelle persistentes Virtual Environment in $VENV_DIR..."
+ python3 -m venv "$VENV_DIR"
 fi
 source "$VENV_DIR/bin/activate"
-grep -qF "/workspace/venv/bin/activate" /root/.bashrc || echo "source /workspace/venv/bin/activate" >> /root/.bashrc
 
 # ------------------------------------------------------------
-# 4. Erstinstallation via setup.sh / Fast-Repair nach Reset
+# 4. Setup.sh laden & ausführen (idempotent, nur beim ersten Boot)
 # ------------------------------------------------------------
-if [ ! -d "$COMFY_DIR" ] || [ ! -f "$MODELS_DIR/wav2lip/s3fd-619a316847.pth" ]; then
-    echo "--> Lade setup.sh von GitHub nach..."
-    curl -f -k -L "$SETUP_URL" -o /workspace/setup.sh
-    chmod +x /workspace/setup.sh
-    echo "--> Starte Erstinstallation..."
-    /bin/bash /workspace/setup.sh
-elif ! python3 -c "import alembic, sqlalchemy, scipy, insightface, soundfile" >/dev/null 2>&1; then
-    echo "--> Fehlende Pakete nach Reset erkannt. Repariere via uv..."
-    pip install --no-cache-dir -q uv
-    uv pip install -r "$COMFY_DIR/requirements.txt"
-    for req in "$COMFY_DIR"/custom_nodes/*/requirements.txt; do
-        [ -f "$req" ] && uv pip install -r "$req" || true
-    done
-    uv pip install insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5" "numpy==1.26.4"
+if [ ! -f "/workspace/comfyui_setup.log" ] || ! grep -q "SETUP ERFOLGREICH BEENDET" /workspace/comfyui_setup.log; then
+ echo "--> Lade und führe setup.sh aus..."
+ curl -fsSL "$SETUP_URL" -o /workspace/setup.sh
+ chmod +x /workspace/setup.sh
+ /workspace/setup.sh
+else
+ echo "✓ Setup bereits durchgeführt — überspringe."
 fi
 
-echo "--> Workspace intakt. Führe Fast-Boot aus..."
-
 # ------------------------------------------------------------
-# 5. Laufzeit-Patches & Symlinks prüfen
+# 5. Fast-Boot: ComfyUI starten (einmalig, nach Setup)
 # ------------------------------------------------------------
-find /workspace/venv -path "*/basicsr/data/degradations.py" -exec sed -i 's|from torchvision.transforms.functional_tensor import rgb_to_grayscale|from torchvision.transforms.functional import rgb_to_grayscale|g' {} + 2>/dev/null || true
+echo "=== Starte ComfyUI Server (Fast-Boot) ==="
+cd /workspace
 
-WAV2LIP_PATH="$COMFY_DIR/custom_nodes/ComfyUI_wav2lip"
-SADTALKER_PATH="$COMFY_DIR/custom_nodes/Comfyui-SadTalker"
+# Prüfen ob schon läuft (PID-Datei vermeiden Doppelstart)
+if pgrep -f "ComfyUI/main.py" >/dev/null 2>&1; then
+ echo "⚠ ComfyUI läuft bereits — überspringe Start."
+else
+ nohup ./venv/bin/python /workspace/ComfyUI/main.py --listen 0.0.0.0 --port 8188 >> /workspace/comfyui_boot.log 2>&1 < /dev/null &
+ COMFY_PID=$!
+ echo "✓ ComfyUI gestartet (PID $COMFY_PID), warte auf Bereitschaft..."
 
-mkdir -p "$WAV2LIP_PATH/Wav2Lip/checkpoints" "$SADTALKER_PATH/SadTalker/checkpoints"
-ln -sf "$MODELS_DIR"/wav2lip/* "$WAV2LIP_PATH/Wav2Lip/checkpoints/" 2>/dev/null || true
-ln -sf "$MODELS_DIR"/sadtalker/* "$SADTALKER_PATH/SadTalker/checkpoints/" 2>/dev/null || true
-ln -sfn "$MODELS_DIR/liveportrait" "$COMFY_DIR/custom_nodes/ComfyUI-LivePortrait/pretrained_weights" 2>/dev/null || true
-ln -sfn "$MODELS_DIR/insightface" "$COMFY_DIR/custom_nodes/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
+ # Warte auf HTTP-Readiness (max 180s)
+ for i in {1..36}; do
+   if curl -sf -m 5 http://127.0.0.1:8188/system_stats >/dev/null 2>&1; then
+     echo "✓ ComfyUI HTTP erreichbar"
+     break
+   fi
+   sleep 5
+ done
 
-FACEXLIB_DIR=$(python3 -c "import facexlib, os; print(os.path.dirname(facexlib.__file__))" 2>/dev/null || true)
-GFPGAN_DIR=$(python3 -c "import gfpgan, os; print(os.path.dirname(gfpgan.__file__))" 2>/dev/null || true)
-[ -n "$FACEXLIB_DIR" ] && mkdir -p "$FACEXLIB_DIR/weights" && ln -sf "$MODELS_DIR"/facexlib/* "$FACEXLIB_DIR/weights/" 2>/dev/null || true
-[ -n "$GFPGAN_DIR" ] && mkdir -p "$GFPGAN_DIR/weights" && ln -sf "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "$GFPGAN_DIR/weights/" 2>/dev/null || true
-
-# ------------------------------------------------------------
-# 6. Server Start & Live-Verifikation
-# ------------------------------------------------------------
-echo "=== Starte ComfyUI Server ==="
-pkill -9 -f "python.*main.py" 2>/dev/null || true
-sleep 1
-
-nohup python3 "$COMFY_DIR/main.py" --listen 0.0.0.0 --port 8188 > /workspace/comfyui_server.log 2>&1 &
-SERVER_PID=$!
-
-echo "--> Warte auf Serverbereitschaft (max. 180s für Migrationen)..."
-SERVER_READY=false
-for i in {1..180}; do
-    if curl -s -f http://127.0.0.1:8188/object_info >/dev/null 2>&1; then
-        SERVER_READY=true
-        break
-    fi
-    sleep 1
-done
-
-if [ "$SERVER_READY" = false ]; then
-    echo "FEHLER: Server antwortet nach 180s nicht. Letzte Logs:"
-    tail -n 30 /workspace/comfyui_server.log
-    exit 1
-fi
-
-echo "--> Verifiziere LipSync-Nodes..."
-curl -s -f http://127.0.0.1:8188/object_info | python3 -c "
+ # Verifikation: LipSync-Nodes + mediapipe
+ echo "--> Verifiziere LipSync-Nodes..."
+ if curl -sf -m 30 http://127.0.0.1:8188/object_info | /workspace/venv/bin/python -c "
 import sys, json
 data = json.load(sys.stdin)
-required = ['Wav2Lip', 'SadTalker', 'LivePortraitProcess']
+required = ['Wav2Lip', 'SadTalker', 'LivePortraitProcess', 'LivePortraitCropper', 'LivePortraitComposite', 'LivePortraitRetargeting']
 missing = [n for n in required if n not in data]
 if missing:
-    sys.exit(f'WARNUNG: Folgende Nodes wurden nicht registriert: {missing}')
-print('✓ Alle Kern-LipSync-Nodes erfolgreich geladen:', required)
+    print('FEHLEND:', missing)
+    sys.exit(1)
+print('✓ Alle LipSync-Nodes registriert:', [n for n in required if n in data])
+"; then
+   echo "✓ Node-Verifikation OK"
+ else
+   echo "✗ Node-Verifikation FEHLGESCHLAGEN"
+   exit 1
+ fi
+
+ /workspace/venv/bin/python -c "
+import mediapipe
+from mediapipe.framework.formats import landmark_pb2
+print('✓ mediapipe framework.formats Import OK')
 "
-
-echo "✓ ComfyUI läuft stabil auf Port 8188."
-
-if [ "${RUN_IN_BACKGROUND:-false}" != "true" ]; then
-    wait "$SERVER_PID"
 fi
+
+echo "=== Pod bereit ==="
