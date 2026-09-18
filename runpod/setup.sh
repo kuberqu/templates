@@ -48,6 +48,20 @@ PIN_NUMPY="numpy==1.26.4"
 PIN_MEDIAPIPE="mediapipe==0.10.21"
 EXTRA_PKGS=(insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5")
 
+# ---- Generative Modelle (LTX-2.5 + FLUX) -----------------------------------
+# Der LipSync-Kern kommt ohne diese Modelle aus. Die Gen-Phase ist:
+#   * abschaltbar mit INSTALL_GEN=0
+#   * selbstüberspringend, wenn kein HF-Token vorliegt (LTX-2.5 ist ein GATED
+#     Repo: ohne Token liefert Hugging Face 401, der Pod würde sonst scheitern)
+#   * rein additiv — sie startet als eigene Hintergrund-Phase, damit der
+#     Fast-Boot auf intaktem Volume unverändert schnell bleibt (fast_download
+#     prüft mit -s und lädt nur fehlende Dateien).
+INSTALL_GEN="${INSTALL_GEN:-1}"
+HF_TOKEN_FILE="${HF_TOKEN_FILE:-$BASE_DIR/.hf_token}"
+GEN_STAGE="$BASE_DIR/gen_models"          # hf download --local-dir (Staging)
+GEN_STATUS="$BASE_DIR/gen_models_status.json"
+GEN_DOWNLOAD_PID=""
+
 FAILED_PHASES=()
 PHASE_RESULTS=()
 
@@ -113,6 +127,52 @@ find_uv() {
 # uv-Install IMMER gegen den ComfyUI-venv — unabhängig von VIRTUAL_ENV
 uv_install() {
     "$UV_BIN" pip install --python "$VENV/bin/python" "$@"
+}
+
+# ------------------------------------------------------------
+# Hugging Face: Token + Download-Helfer für die Gen-Modelle
+# ------------------------------------------------------------
+# Ohne Token antwortet HF inzwischen auch auf öffentliche Repos mit 401
+# (gemessen 18.09.2026: 401 + x-pow-Header auf Comfy-Org/FLUX.1-schnell),
+# deshalb läuft der Gen-Download über die hf-CLI statt über aria2c/curl-URLs.
+hf_token() {
+    if [ -n "${HF_TOKEN:-}" ]; then printf '%s' "$HF_TOKEN"; return 0; fi
+    if [ -s "$HF_TOKEN_FILE" ]; then tr -d '[:space:]' < "$HF_TOKEN_FILE"; return 0; fi
+    return 1
+}
+
+# hf_download <repo> <include-pattern>...  (Resume inklusive)
+hf_download() {
+    local repo="$1"; shift
+    local tok; tok="$(hf_token)" || return 3
+    local args=(download "$repo" --local-dir "$GEN_STAGE")
+    local pat
+    for pat in "$@"; do args+=(--include "$pat"); done
+    HF_TOKEN="$tok" "$VENV/bin/hf" "${args[@]}" >/dev/null 2>&1
+}
+
+# Verlinkt alle gestagten Dateien in die ComfyUI-Modellordner (flach, wie die
+# Symlink-Konvention der LipSync-Modelle). Erkennt auch split_files/-Layouts
+# des Comfy-Org-Repackagings, weil nach dem Elternordner-Namen zugeordnet wird.
+link_gen_models() {
+    local n=0 d f base target
+    for d in diffusion_models vae text_encoders clip loras unet latent_upscale_models model_patches; do
+        [ -d "$GEN_STAGE/$d" ] || continue
+        for f in "$GEN_STAGE/$d"/*; do
+            [ -f "$f" ] || continue
+            mkdir -p "$MODELS_DIR/$d"
+            ln -sfn "$f" "$MODELS_DIR/$d/$(basename "$f")" && n=$((n + 1))
+        done
+    done
+    while IFS= read -r f; do
+        base="$(basename "$(dirname "$f")")"
+        case "$base" in
+            diffusion_models|vae|text_encoders|clip|loras|unet|latent_upscale_models|model_patches)
+                mkdir -p "$MODELS_DIR/$base"
+                ln -sfn "$f" "$MODELS_DIR/$base/$(basename "$f")" && n=$((n + 1)) ;;
+        esac
+    done < <(find "$GEN_STAGE" -mindepth 3 -maxdepth 3 -type f -name "*.safetensors" 2>/dev/null)
+    echo "$n"
 }
 
 # ------------------------------------------------------------
@@ -323,9 +383,118 @@ download_models_background() {
     echo "✓ [parallel] Modell-Downloads abgeschlossen"
 }
 
+# ------------------------------------------------------------
+# Generative Modelle: LTX-2.5 (gated) + FLUX.1-schnell (Apache-2.0)
+# Läuft als ZWEITE parallele Phase. Bewusst defensiv:
+#   * kein Token  -> skip, kein Fehler (LipSync-Pod bootet weiter)
+#   * INSTALL_GEN=0 -> skip
+#   * Größenprüfung erst nach dem Download (Phase 7)
+# Reihenfolge nach Nutzen: LTX-2.5 zuerst (Video+Audio, Multishot = konsistente
+# Charaktere über Schnitte), dann der Gemma-Textencoder, dann FLUX für den
+# Charakter-Kanon. Der optionale Prompt-Enhancer (~5 GB) bleibt aus (Kosten/Nutzen).
+# ------------------------------------------------------------
+download_gen_models_background() {
+    local t0; t0=$(date +%s)
+    local ok=0 fail=0 linked=0
+    printf '{"installed": false, "reason": "started", "files": []}\n' > "$GEN_STATUS"
+
+    if [ "$INSTALL_GEN" != "1" ]; then
+        echo "--> [gen] übersprungen: INSTALL_GEN=$INSTALL_GEN"
+        printf '{"installed": false, "reason": "INSTALL_GEN=%s"}\n' "$INSTALL_GEN" > "$GEN_STATUS"
+        return 0
+    fi
+    if ! hf_token >/dev/null; then
+        echo "--> [gen] übersprungen: kein HF-Token (HF_TOKEN oder $HF_TOKEN_FILE)"
+        echo "    LTX-2.5 ist ein GATED Repo — Token vom Account mit akzeptierter Lizenz nötig."
+        printf '{"installed": false, "reason": "no_hf_token"}\n' > "$GEN_STATUS"
+        return 0
+    fi
+    if [ ! -x "$VENV/bin/hf" ]; then
+        echo "--> [gen] hf-CLI fehlt im venv -> übersprungen"
+        printf '{"installed": false, "reason": "no_hf_cli"}\n' > "$GEN_STATUS"
+        return 0
+    fi
+
+    echo "--> [gen] LTX-2.5 + Qwen-Image/-Edit gestartet (Staging: $GEN_STAGE)"
+    mkdir -p "$GEN_STAGE" "$MODELS_DIR"/{diffusion_models,vae,text_encoders,clip,loras,unet,latent_upscale_models,model_patches}
+
+    # ---- LTX-2.5 (gated). Dateinamen am 18.09.2026 per HfApi verifiziert.
+    # int8_convrot statt nvfp4: NVFP4 ist ein Blackwell-Pfad, auf Ampere
+    # (A40/A6000) ist int8 die tragfähige Variante. Summe Kern ≈ 40 GB.
+    # Der Prompt-Enhancer (~5 GB) bleibt bewusst draußen (Zeit/Nutzen).
+    local ltx_files=(
+        "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+        "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+        "vae/ltx-2.5-video-vae-bf16.safetensors"
+        "vae/ltx-2.5-audio-vae-bf16.safetensors"
+        "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+        "latent_upscale_models/ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors"
+        "model_patches/ltx-2.5-duration-head-bf16.safetensors"
+    )
+    for f in "${ltx_files[@]}"; do
+        if hf_download "Lightricks/LTX-2.5" "$f"; then
+            ok=$((ok + 1))
+        else
+            fail=$((fail + 1)); echo "   ⚠ LTX-2.5 $(basename "$f") fehlgeschlagen"
+        fi
+    done
+    echo "   LTX-2.5: $ok/$((ok + fail)) Kerndateien"
+
+    # Optional: distilled-LoRA (8,9 GB) für schnellere Inferenz
+    if [ "${INSTALL_GEN_LORA:-0}" = "1" ]; then
+        hf_download "Lightricks/LTX-2.5" \
+            "loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" \
+            && echo "   ✓ LTX-2.5 distilled-LoRA" || echo "   ⚠ distilled-LoRA fehlgeschlagen"
+    fi
+
+    # ---- Qwen-Image 2512 + Qwen-Image-Edit 2511 (beide Apache-2.0, also
+    # kommerziell frei). Edit + Multiple-Angles-LoRA ist der Weg zur
+    # konsistenten Host-Figur (gleiche Identität, andere Blickwinkel/Szenen).
+    local qwen_ok=0 qwen_fail=0
+    local qwen_img=(
+        "split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors"
+        "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+        "split_files/vae/qwen_image_vae.safetensors"
+    )
+    for f in "${qwen_img[@]}"; do
+        if hf_download "Comfy-Org/Qwen-Image_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
+    done
+    local qwen_edit=(
+        "split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors"
+        "split_files/loras/Qwen-Edit-2509-Multiple-angles.safetensors"
+        "split_files/loras/Qwen-Image-Edit-2509-Relight.safetensors"
+    )
+    for f in "${qwen_edit[@]}"; do
+        if hf_download "Comfy-Org/Qwen-Image-Edit_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
+    done
+    ok=$((ok + qwen_ok)); fail=$((fail + qwen_fail))
+    echo "   Qwen (Image+Edit): $qwen_ok/$((qwen_ok + qwen_fail)) Dateien"
+    # FLUX.1-schnell wurde bewusst NICHT aufgenommen: Stand 08/2024, überholt
+    # durch Qwen-Image 2512 (Apache-2.0). FLUX.2 [dev] wäre qualitativ stärker,
+    # ist aber Non-Commercial lizenziert — für monetarisierte Kanäle ein Risiko.
+
+    linked=$(link_gen_models)
+    local dur_s=$(( $(date +%s) - t0 ))
+    local total; total=$(du -sh "$GEN_STAGE" 2>/dev/null | cut -f1)
+    if [ "$fail" -eq 0 ] && [ "$linked" -gt 0 ]; then
+        printf '{"installed": true, "linked": %s, "staging": "%s", "seconds": %s, "patterns_ok": %s}\n' \
+            "$linked" "$total" "$dur_s" "$ok" > "$GEN_STATUS"
+        echo "✓ [gen] fertig: $linked Dateien verlinkt, $total, ${dur_s}s"
+    else
+        printf '{"installed": false, "reason": "partial", "linked": %s, "failed_patterns": %s, "seconds": %s}\n' \
+            "$linked" "$fail" "$dur_s" > "$GEN_STATUS"
+        echo "⚠ [gen] unvollständig: $linked verlinkt, $fail Muster fehlgeschlagen, ${dur_s}s"
+    fi
+    return 0
+}
+
 step "2. Modell-Downloads (parallel)"
 download_models_background &
 DOWNLOAD_PID=$!
+if [ "$INSTALL_GEN" = "1" ]; then
+    download_gen_models_background &
+    GEN_DOWNLOAD_PID=$!
+fi
 
 # ------------------------------------------------------------
 # 3. Custom Nodes (parallel klonen)
