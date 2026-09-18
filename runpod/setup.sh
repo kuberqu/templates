@@ -141,14 +141,28 @@ hf_token() {
     return 1
 }
 
-# hf_download <repo> <include-pattern>...  (Resume inklusive)
-hf_download() {
-    local repo="$1"; shift
-    local tok; tok="$(hf_token)" || return 3
-    local args=(download "$repo" --local-dir "$GEN_STAGE")
-    local pat
-    for pat in "$@"; do args+=(--include "$pat"); done
-    HF_TOKEN="$tok" "$VENV/bin/hf" "${args[@]}" >/dev/null 2>&1
+# hf_fetch <zielpfad> <repo> <repo-pfad>   (Resume inklusive)
+# Lädt eine (auch GATED) Datei direkt per aria2c/curl mit Authorization-Header.
+# Bewusst NICHT über die hf-CLI: die steckt im frischen venv nicht drin, und ein
+# `uv pip install` in Phase 2 würde mit den parallel laufenden Installationen
+# kollidieren (zwei uv-Läufe im selben venv). Header-Download umgeht das.
+hf_fetch() {
+    local target="$1" repo="$2" sub="$3" tok url
+    if [ -s "$target" ]; then echo "   vorhanden: $(basename "$target")"; return 0; fi
+    tok="$(hf_token)" || return 3
+    url="https://huggingface.co/$repo/resolve/main/$sub"
+    mkdir -p "$(dirname "$target")"
+    if command -v aria2c >/dev/null 2>&1; then
+        aria2c -q -c -x 16 -s 16 -k 1M --timeout=60 --connect-timeout=20 \
+            --max-tries=5 --retry-wait=5 --check-certificate=false \
+            --header="Authorization: Bearer $tok" \
+            -d "$(dirname "$target")" -o "$(basename "$target")" "$url" \
+        || curl -k -L -f --retry 5 --connect-timeout 20 \
+             -H "Authorization: Bearer $tok" -o "$target" "$url"
+    else
+        curl -k -L -f --retry 5 --connect-timeout 20 \
+             -H "Authorization: Bearer $tok" -o "$target" "$url"
+    fi
 }
 
 # Verlinkt alle gestagten Dateien in die ComfyUI-Modellordner (flach, wie die
@@ -409,9 +423,9 @@ download_gen_models_background() {
         printf '{"installed": false, "reason": "no_hf_token"}\n' > "$GEN_STATUS"
         return 0
     fi
-    if [ ! -x "$VENV/bin/hf" ]; then
-        echo "--> [gen] hf-CLI fehlt im venv -> übersprungen"
-        printf '{"installed": false, "reason": "no_hf_cli"}\n' > "$GEN_STATUS"
+    if ! command -v aria2c >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+        echo "--> [gen] weder aria2c noch curl vorhanden -> übersprungen"
+        printf '{"installed": false, "reason": "no_downloader"}\n' > "$GEN_STATUS"
         return 0
     fi
 
@@ -432,7 +446,7 @@ download_gen_models_background() {
         "model_patches/ltx-2.5-duration-head-bf16.safetensors"
     )
     for f in "${ltx_files[@]}"; do
-        if hf_download "Lightricks/LTX-2.5" "$f"; then
+        if hf_fetch "$GEN_STAGE/$f" "Lightricks/LTX-2.5" "$f"; then
             ok=$((ok + 1))
         else
             fail=$((fail + 1)); echo "   ⚠ LTX-2.5 $(basename "$f") fehlgeschlagen"
@@ -442,8 +456,8 @@ download_gen_models_background() {
 
     # Optional: distilled-LoRA (8,9 GB) für schnellere Inferenz
     if [ "${INSTALL_GEN_LORA:-0}" = "1" ]; then
-        hf_download "Lightricks/LTX-2.5" \
-            "loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" \
+        LORA_REL="loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors"
+        hf_fetch "$GEN_STAGE/$LORA_REL" "Lightricks/LTX-2.5" "$LORA_REL" \
             && echo "   ✓ LTX-2.5 distilled-LoRA" || echo "   ⚠ distilled-LoRA fehlgeschlagen"
     fi
 
@@ -457,7 +471,7 @@ download_gen_models_background() {
         "split_files/vae/qwen_image_vae.safetensors"
     )
     for f in "${qwen_img[@]}"; do
-        if hf_download "Comfy-Org/Qwen-Image_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
+        if hf_fetch "$GEN_STAGE/$f" "Comfy-Org/Qwen-Image_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
     done
     local qwen_edit=(
         "split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors"
@@ -465,7 +479,7 @@ download_gen_models_background() {
         "split_files/loras/Qwen-Image-Edit-2509-Relight.safetensors"
     )
     for f in "${qwen_edit[@]}"; do
-        if hf_download "Comfy-Org/Qwen-Image-Edit_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
+        if hf_fetch "$GEN_STAGE/$f" "Comfy-Org/Qwen-Image-Edit_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
     done
     ok=$((ok + qwen_ok)); fail=$((fail + qwen_fail))
     echo "   Qwen (Image+Edit): $qwen_ok/$((qwen_ok + qwen_fail)) Dateien"
