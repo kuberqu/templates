@@ -65,6 +65,51 @@ Ohne sie bricht jeder LTX-Workflow ab mit `Value not in list: ckpt_name`.
 | `ok: false` trotz vollständiger Modelle | `stat -c %s` auf Symlink liefert die Symlink-Länge (~100 B) | `stat -L` verwenden |
 | Gen-Größenprüfung cmd in Phase 7 | s. `runpod/gen_report.sh` als Einzelprüfung | `bash /workspace/gen_report.sh` |
 
+### Charakter-LoRA von fal.ai einbinden
+
+fal trainiert im **diffusers-Format**, ComfyUI braucht sein eigenes Schema — ohne
+Konvertierung lädt die LoRA nicht (oder wird stillschweigend ignoriert):
+
+| | fal/diffusers | ComfyUI |
+|---|---|---|
+| Präfix | `transformer.transformer_blocks.…` | `transformer_blocks.…` |
+| Gewichte | `lora_A.weight` / `lora_B.weight` | `lora_down.weight` / `lora_up.weight` |
+| Alpha | nur in Metadaten (`lora_alpha`) | eigener `alpha`-Tensor je Modul |
+
+`runpod/convert_lora.py` erledigt das. **Alpha muss `lora_alpha` aus den Metadaten
+sein, nicht geraten** — bei 2000 Steps/LR 5e-4 war es 16 (= rank). Mit alpha=32
+statt 16 wirkt die LoRA doppelt so stark und überzeichnet die Figur.
+
+Ablauf: fal-Queue überwachen (`fal_status.py`), Ergebnis laden, konvertieren,
+nach `models/loras/` verlinken, dann `LoraLoaderModelOnly` nach `ModelSamplingAuraFlow`
+und vor den KSampler hängen. Vergleich ohne/mit/abgeschwächt immer mit gleichem Seed.
+
+### Short-Produktion (Pipeline)
+
+`shorts/` enthält die Kette für eine Folge, jeder Schritt einzeln wiederholbar:
+
+| Skript | Aufgabe |
+|---|---|
+| `script.json` | Szenenplan: je Szene Text, Typ (`host`/`broll`), Bild-Prompt, Clip-Prompt, Plandauer |
+| `make_narration.py` | edge-tts je Szene + **gemessene** Dauern nach `timing.json` |
+| `make_images.py` | Host-Szenen über den Kanon (Edit+Angles), B-Roll via T2I 768×1344; `--only 4,10` für Einzelszenen |
+| `make_clips.py` | LTX-I2V je Bild, Länge aus `timing.json` + Luft, auf 8n+1 gerundet |
+| `compose.py` | Clips concat → 1080×1920, Narration-Zeitleiste, Whisper-Untertitel, Ambient-Bett mit Sidechain-Ducking, −14 LUFS |
+
+Regeln, die sich bewährt haben:
+
+* **Host nur als Rahmen** (Hook + Schluss, je ~3 s), die Information trägt der Film —
+  in der Mitte keine Host-Szene.
+* **Sprache im Clip-Prompt angeben.** Ohne Angabe generiert LTX Sprache in der
+  Prompt-Sprache (englischer Prompt → englisch sprechende Figur, live gehört).
+  Für B-Roll: `no speech, ambience only`.
+* **Szenen-Nummern nicht nachträglich umsortieren.** Werden Szenen eingefügt oder
+  gestrichen, verschieben sich die Bilddateien und die Clips bekommen die falschen
+  Bilder — Bilder nach dem Umbau komplett neu erzeugen (kostet ~9 Min, spart den
+  Fehlgriff).
+* LTX-Ton auf −26 dB absenken und unter die Narration ducken: er ist Atmo, kann aber
+  Sprachreste des Prompts enthalten.
+
 ### Charakter (wiederkehrende Figur)
 
 Zwei Werkzeuge, beide laufen über den offiziellen Qwen-Image-Pfad:
