@@ -1,0 +1,107 @@
+{
+  "titel": "Hummer knurren mit dem Magen",
+  "version": 2,
+  "aenderung_v2": "Host auf Rahmen reduziert (2 kurze Auftritte), 8 Info-Szenen; Sprachangabe in den Clip-Prompts (englischer Ton war die Folge des englischen Prompts)",
+  "thema": "Hummer Magenmühle / tieffrequentes Knurren zur Raubfisch-Abwehr",
+  "sprache": "de-DE",
+  "stimme": "de-DE-FlorianMultilingualNeural",
+  "voice_rate": "+8%",
+  "format": "1080x1920",
+  "fps": 24,
+  "regie": "Der Host ist nur Rahmen (Hook + Schluss, je ~3 s). Die Information traegt der Film: Hummer, Magenmuehle, Raubfisch, Vibration. Keine Host-Szene in der Mitte.",
+  "quellen": [
+    "arXiv 2511.16848 (2025): Homarus gammarus erzeugt Carapax-Vibrationen 80-250 Hz",
+    "Patek 2001/2002 (Nature, JEB): Stridulation der Langusten, Stick-and-Slip",
+    "Bouwma & Herrnkind 2004/2007: stummgeschaltete Tiere werden haeufiger attackiert",
+    "McGill OSS: Krebstiere tragen Zaehne im Magen (Gastric Mill, Chitin + Calciumcarbonat)"
+  ],
+  "untertitel_korrekturen": {
+    "Malzähne": "Mahlzähne",
+    "Malwerk": "Mahlwerk",
+    "Heutung": "Häutung",
+    "Kalziumkarbonat": "Calciumcarbonat"
+  },
+  "hinweis_formulierung": "Schallquelle bei Homarus ist nicht abschliessend geklaert (Magenmuehle vs. Carapax-Vibration) - 'gilt als' statt Behauptung.",
+  "szenen": [
+    {
+      "id": 1,
+      "typ": "host",
+      "dauer_s": 3.0,
+      "text": "Dieser Hummer knurrt. Aber nicht mit dem Maul.",
+      "bild_prompt": "将镜头转为特写镜头 A close-up of the same man as in the input image, engaged serious expression, dark blue studio background, tight news anchor framing",
+      "clip_prompt": "The man speaks German to the camera with a serious expression, subtle head movement, dark blue studio background, no music"
+    },
+    {
+      "id": 2,
+      "typ": "broll",
+      "dauer_s": 5.0,
+      "text": "Hummer haben Zähne: drei Mahlzähne, tief im Verdauungstrakt.",
+      "bild_prompt": "Underwater macro photograph of a European lobster on a rocky sea floor, cold blue-green water, detailed shell texture, claws visible, natural light rays from above, documentary style",
+      "clip_prompt": "The lobster moves slowly on the rocky sea floor, antennae twitching, particles drifting in the cold water, gentle camera push in, underwater ambience only, no speech, no music"
+    },
+    {
+      "id": 3,
+      "typ": "broll",
+      "dauer_s": 5.5,
+      "text": "Die Magenmühle: Chitin und Calciumcarbonat, ein Mahlwerk, das Nahrung zerreibt.",
+      "bild_prompt": "Scientific macro photograph of a dissected lobster stomach showing the gastric mill, three hardened grinding teeth made of chitin and calcium carbonate, pale organic tissue, laboratory setting with clinical lighting, extremely detailed",
+      "clip_prompt": "Extreme macro shot of the hardened grinding teeth inside the lobster stomach, slight movement of surrounding tissue, clinical laboratory light, sterile room tone only, no speech, no music"
+    },
+    {
+      "id": 4,
+      "typ": "broll",
+      "dauer_s": 5.0,
+      "text": "Bei jeder Häutung werden die Zähne komplett erneuert.",
+      "bild_prompt": "Underwater photograph of a lobster in the process of molting, old shell splitting open at the back, soft new pale shell visible underneath, cold blue-green water, documentary macro photography",
+      "clip_prompt": "The lobster's old shell slowly splits open as it molts, new pale shell visible underneath, gentle water currents, underwater ambience only, no speech, no music"
+    },
+    {
+      "id": 5,
+      "typ": "broll",
+      "dauer_s": 5.0,
+      "text": "Doch wenn ein Kabeljau auftaucht, passiert etwas Unerwartetes.",
+      "bild_prompt": "Underwater photograph of a large Atlantic cod approaching through murky green-blue water, predatory posture, mouth slightly open, cold sea, documentary wildlife photography, dramatic side light",
+      "clip_prompt": "The large cod swims slowly toward the camera through cold water, fins moving, silt drifting, tense underwater atmosphere, ambience only, no speech, no music"
+    },
+    {
+      "id": 6,
+      "typ": "broll",
+      "dauer_s": 4.5,
+      "text": "Der Hummer reibt die Magenzähne rasend schnell aneinander.",
+      "bild_prompt": "Close-up underwater photograph of a lobster retreating into a rocky crevice, body tensed, cold water, dramatic low light, documentary macro, sense of sudden movement",
+      "clip_prompt": "The lobster backs into the rock crevice with tense quick movements, sediment rising, underwater low light, ambience only, no speech, no music"
+    },
+    {
+      "id": 7,
+      "typ": "broll",
+      "dauer_s": 5.5,
+      "text": "Das erzeugt ein tiefes Knurren, zwischen achtzig und zweihundertfünfzig Hertz.",
+      "bild_prompt": "Underwater photograph with visible low frequency sound waves propagating through dark water as subtle expanding rings, a lobster in the lower corner, deep blue tones, cinematic scientific visualization, no text",
+      "clip_prompt": "Low frequency vibrations travel through the dark water as expanding rings, the lobster crouched in the corner, deep rumbling atmosphere, no speech, no music"
+    },
+    {
+      "id": 8,
+      "typ": "broll",
+      "dauer_s": 5.0,
+      "text": "Der Panzer wirkt wie ein Lautsprecher und strahlt den Ton ins Wasser ab.",
+      "bild_prompt": "Extreme close-up photograph of a lobster carapace surface in cold underwater light, intricate shell structure, fine sediment particles, shallow depth of field, documentary macro photography",
+      "clip_prompt": "Extreme close-up of the lobster carapace vibrating slightly in cold water, fine sediment particles drifting past, subtle shell movement, ambience only, no speech, no music"
+    },
+    {
+      "id": 9,
+      "typ": "broll",
+      "dauer_s": 6.0,
+      "text": "Für den Räuber klingt das nach einem Gegner, den er nicht einschätzen kann. Und er zieht weiter.",
+      "bild_prompt": "Underwater photograph of a large cod turning away into murky green water, tail visible, cold sea landscape with kelp in the distance, documentary wildlife photography",
+      "clip_prompt": "The cod turns and swims away from the camera into the green murk, tail moving steadily, kelp swaying in the background, calm underwater ambience, no speech, no music"
+    },
+    {
+      "id": 10,
+      "typ": "broll",
+      "dauer_s": 5.0,
+      "text": "Ein Tier, das mit dem Verdauungstrakt droht. Die Natur hat seltsame Ideen.",
+      "bild_prompt": "Underwater photograph of a lobster standing its ground on a rock ledge, claws raised, cold blue water, dramatic low camera angle, documentary style, sense of defiance",
+      "clip_prompt": "The lobster stands its ground on the rock ledge with claws raised, slow decisive movement, cold water swirling, ambience only, no speech, no music"
+    }
+  ]
+}

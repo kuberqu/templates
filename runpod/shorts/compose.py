@@ -100,7 +100,16 @@ def build_timeline(proj: Path, timing: dict) -> tuple[str, list[tuple[int, float
     return out, marks
 
 
-def whisper_srt(narration: str, out_srt: str) -> bool:
+def apply_corrections(txt: str, corr: dict) -> str:
+    """Whisper verhoert Fachbegriffe (gemessen: 'Malzaehne', 'Malwerk',
+    'Heutung'). Die Korrekturliste steht im Skript, damit die Untertitel die
+    korrekte Schreibweise zeigen."""
+    for wrong, right in (corr or {}).items():
+        txt = re.sub(rf"\b{re.escape(wrong)}\b", right, txt)
+    return txt
+
+
+def whisper_srt(narration: str, out_srt: str, corr: dict | None = None) -> bool:
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as e:                                    # pragma: no cover
@@ -129,9 +138,20 @@ def whisper_srt(narration: str, out_srt: str) -> bool:
             buf, start = [], None
     if buf:
         lines.append((start, words[-1][1], " ".join(buf)))
+
+    # Nachbearbeitung: Ein-Wort-Reste an die vorige Zeile haengen. Einzelne
+    # Woerter wie "Maul." ergeben sonst 0,3-s-Einblendungen (unlesbar).
+    merged: list = []
+    for a, b, txt in lines:
+        if merged and len(txt.split()) < 2:
+            pa, _pb, ptxt = merged[-1]
+            merged[-1] = (pa, b, ptxt + " " + txt)
+        else:
+            merged.append((a, b, txt))
+    lines = merged
     with open(out_srt, "w") as fh:
         for i, (a, b, txt) in enumerate(lines, 1):
-            fh.write(f"{i}\n{ts(a)} --> {ts(b)}\n{txt}\n\n")
+            fh.write(f"{i}\n{ts(a)} --> {ts(b)}\n{apply_corrections(txt, corr)}\n\n")
     print(f"  Untertitel: {len(lines)} Zeilen -> {out_srt}")
     return True
 
@@ -166,7 +186,16 @@ def main() -> None:
 
     # 3) Untertitel
     srt = proj / "untertitel.srt"
-    ok = False if a.no_whisper else whisper_srt(narration, str(srt))
+    corr = {}
+    for cand in sorted(proj.glob("script*.json")):
+        try:
+            corr = json.load(open(cand)).get("untertitel_korrekturen") or {}
+            if corr:
+                print(f"  Untertitel-Korrekturen aus {cand.name}: {len(corr)}")
+                break
+        except Exception:
+            pass
+    ok = False if a.no_whisper else whisper_srt(narration, str(srt), corr)
     if not ok:
         # Fallback: Szenentexte gleichmaessig verteilen
         with open(srt, "w") as fh:

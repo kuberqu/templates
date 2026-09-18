@@ -80,9 +80,18 @@ Konvertierung lädt die LoRA nicht (oder wird stillschweigend ignoriert):
 sein, nicht geraten** — bei 2000 Steps/LR 5e-4 war es 16 (= rank). Mit alpha=32
 statt 16 wirkt die LoRA doppelt so stark und überzeichnet die Figur.
 
+**Stärke nicht auf 1.0 stellen.** Gemessen: bei `strength_model 1.0` zieht die LoRA
+den Hintergrund aus dem Trainingsdatensatz mit — statt des dunkelblauen Studios
+erschien ein Büroraum mit Glasflächen (eines der 18 Trainingsbilder). Bei **0.8**
+bleibt der Prompt bestimmend und die Figur sitzt trotzdem. Empfehlung 0.6–0.8.
+
 Ablauf: fal-Queue überwachen (`fal_status.py`), Ergebnis laden, konvertieren,
 nach `models/loras/` verlinken, dann `LoraLoaderModelOnly` nach `ModelSamplingAuraFlow`
 und vor den KSampler hängen. Vergleich ohne/mit/abgeschwächt immer mit gleichem Seed.
+
+**Wann LoRA, wann Kanon:** Host-Aufnahmen über den Kanon (Edit + Referenzbild) —
+präziser, weil die Identität direkt vom Bild kommt. Die trainierte LoRA für freie
+Szenen, in denen die Figur ohne Referenz auftreten soll.
 
 ### Short-Produktion (Pipeline)
 
@@ -109,6 +118,13 @@ Regeln, die sich bewährt haben:
   Fehlgriff).
 * LTX-Ton auf −26 dB absenken und unter die Narration ducken: er ist Atmo, kann aber
   Sprachreste des Prompts enthalten.
+* **Untertitel gegenprüfen:** Whisper verhört Fachbegriffe. Gemessen bei diesem Thema:
+  „Malzähne" statt Mahlzähne, „Malwerk" statt Mahlwerk, „Heutung" statt Häutung.
+  Deshalb `untertitel_korrekturen` im Skript-JSON pflegen — `compose.py` wendet sie
+  auf jede Zeile an. Ein-Wort-Reste werden automatisch an die vorige Zeile gehängt
+  (sonst 0,3-s-Einblendungen, die niemand lesen kann).
+* `faster-whisper` gehört ins Setup (Phase 8f/8i) — sonst fällt der Schnitt auf die
+  Szenentexte zurück, die pro Einblendung zu lang sind.
 
 ### Charakter (wiederkehrende Figur)
 
