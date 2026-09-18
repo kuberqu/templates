@@ -1,5 +1,39 @@
 # RunPod Template — Start & Recovery
 
+## Generative Modelle (LTX-2.5 / Qwen-Image) — Setup-Schalter
+
+`setup.sh` lädt seit 18.09.2026 zusätzlich die Modelle für Video-/Bildgenerierung
+(~92 GB) als **zweite parallele Phase**. Steuerung:
+
+| Variable | Wirkung | Default |
+|---|---|---|
+| `INSTALL_GEN` | `1` = Gen-Modelle laden, `0` = überspringen | `1` |
+| `INSTALL_GEN_LORA` | `1` = LTX-2.5 distilled-LoRA (8,9 GB) zusätzlich | `0` |
+| `HF_TOKEN` | Hugging-Face-Token (**read** genügt, fineGrained ok). Ohne Token wird die Phase **übersprungen statt zu scheitern** | – |
+| `HF_TOKEN_FILE` | Datei mit dem Token (Fallback) | `/workspace/.hf_token` |
+
+**Pflicht für den Download:** HF-Lizenz für `Lightricks/LTX-2.5` (gated) mit dem
+Account akzeptieren, dessen Token gesetzt ist. Am saubersten `HF_TOKEN` als
+**Template-Env** setzen — Achtung: `/workspace` ist ein Netzwerk-Volume, das
+POSIX-Rechte ignoriert (`chmod 600` wirkt dort nicht, alles ist 666).
+
+**Enthaltene Modelle** (Dateinamen/Größen am 18.09.2026 per HfApi verifiziert):
+
+| Modell | Datei | Größe |
+|---|---|---|
+| LTX-2.5 Video/Audio (int8) | `diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot` | 21,5 GB |
+| Gemma4-12B Textencoder (int8) | `text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot` | 15,4 GB |
+| Video-/Audio-VAE | `vae/ltx-2.5-{video,audio}-vae-bf16` | 1,5 + 0,4 GB |
+| Latent-Upscaler (spatial/temporal) | `latent_upscale_models/…` | 1,0 + 0,3 GB |
+| Auto-Duration-Head | `model_patches/ltx-2.5-duration-head-bf16` | 4 MB |
+| Qwen-Image 2512 (Apache-2.0) | `qwen_image_2512_fp8_e4m3fn` + Textencoder + VAE | 20,4 + 9,4 + 0,3 GB |
+| Qwen-Image-Edit 2511 (Apache-2.0) | `qwen_image_edit_2511_int8_convrot` + LoRAs | 20,5 + 1,3 GB |
+
+**Bewusst NICHT enthalten:** FLUX.1-schnell (Stand 08/2024, überholt durch
+Qwen-Image 2512) und FLUX.2 [dev] (Non-Commercial-Lizenz → Risiko bei
+monetarisierten Kanälen). NVFP4-Varianten fehlen ebenfalls: das ist ein
+Blackwell-Pfad, auf Ampere (A40/A6000) ist int8 die tragfähige Wahl.
+
 ## Startcommand (RunPod Template / Pod-Konfiguration)
 
 ⚠️ **Wichtig:** Der Startcommand lädt `entrypoint.sh` bei JEDEM Pod-Boot von

@@ -676,6 +676,18 @@ else
     phase_fail "Modell-Downloads (einzelne Dateien fehlen?)"
 fi
 
+# Gen-Modelle einsammeln. Ein Skip (kein Token/INSTALL_GEN=0) ist KEIN Fehler;
+# ein Teilausfall degradiert nur die Video-Generierung, nicht den LipSync-Kern.
+if [ -n "$GEN_DOWNLOAD_PID" ]; then
+    wait "$GEN_DOWNLOAD_PID" || true
+    if grep -q '"installed": true' "$GEN_STATUS" 2>/dev/null; then
+        phase_ok "Gen-Modelle (LTX-2.5 + Qwen-Image/-Edit)"
+    else
+        GEN_REASON=$(sed -n 's/.*"reason": "\([^"]*\)".*/\1/p' "$GEN_STATUS" 2>/dev/null)
+        phase_ok "Gen-Modelle uebersprungen (${GEN_REASON:-unbekannt})"
+    fi
+fi
+
 mkdir -p "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints" \
          "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints"
 ln -sf "$MODELS_DIR"/wav2lip/*   "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints/" 2>/dev/null || true
@@ -795,6 +807,27 @@ then
     phase_ok "Stack-Verifikation"
 else
     phase_fail "Stack-Verifikation (siehe Ausgabe oben)"
+fi
+
+# --- Gen-Modelle: Existenz + Mindestgroesse (hashen bei 20-GB-Dateien waere
+# unverhaeltnismaessig). Greift nur, wenn die Phase wirklich installiert hat.
+if [ "$INSTALL_GEN" = "1" ] && grep -q '"installed": true' "$GEN_STATUS" 2>/dev/null; then
+    gen_check() {
+        local glob="$1" min_mb="$2" label="$3" f size
+        f=$(ls -1 $glob 2>/dev/null | head -1)
+        if [ -z "$f" ]; then phase_fail "Gen: $label fehlt"; return; fi
+        size=$(( $(stat -c %s "$f") / 1048576 ))
+        if [ "$size" -ge "$min_mb" ]; then phase_ok "Gen: $label (${size} MB)"
+        else phase_fail "Gen: $label zu klein (${size} MB)"; fi
+    }
+    gen_check "$MODELS_DIR/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8*.safetensors" 10000 "LTX-2.5 Modell"
+    gen_check "$MODELS_DIR/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8*.safetensors" 5000 "Gemma4-Textencoder"
+    gen_check "$MODELS_DIR/vae/ltx-2.5-video-vae-bf16.safetensors" 500 "LTX Video-VAE"
+    gen_check "$MODELS_DIR/vae/ltx-2.5-audio-vae-bf16.safetensors" 100 "LTX Audio-VAE"
+    gen_check "$MODELS_DIR/latent_upscale_models/ltx-2.5-latent-spatial-upscaler*.safetensors" 300 "LTX Spatial-Upscaler"
+    gen_check "$MODELS_DIR/diffusion_models/qwen_image_2512*.safetensors" 10000 "Qwen-Image 2512"
+    gen_check "$MODELS_DIR/diffusion_models/qwen_image_edit_2511_int8*.safetensors" 10000 "Qwen-Image-Edit 2511"
+    gen_check "$MODELS_DIR/loras/Qwen-Edit*-Multiple-angles.safetensors" 100 "Multiple-Angles-LoRA"
 fi
 
 # ------------------------------------------------------------
