@@ -58,16 +58,26 @@ if [ "$HTTP" = "200" ]; then
     RES=$("$VENV/bin/python" - <<'PYEOF' 2>/dev/null
 import json, urllib.request
 d = json.load(urllib.request.urlopen("http://127.0.0.1:8188/object_info", timeout=90))
-req = ["Wav2Lip", "SadTalker", "LivePortraitProcess", "LivePortraitCropper",
-       "LivePortraitRetargeting", "LivePortraitComposite", "VHS_VideoCombine"]
-missing = [n for n in req if n not in d]
-print("MISSING=" + ",".join(missing))
+# Produktionsstandard ist der InfiniteTalk-Host (Wan 2.1 I2V + Audio-Patch). Diese
+# Nodes muessen registriert sein, sonst ist der Boot rot.
+req = ["WanInfiniteTalkToVideo", "AudioEncoderLoader", "AudioEncoderEncode",
+       "ModelPatchLoader", "CLIPVisionLoader", "CreateVideo", "SaveVideo",
+       "VHS_LoadVideo", "VHS_VideoCombine", "UpscaleModelLoader", "ImageUpscaleWithModel"]
+# Legacy-Weg (Wav2Lip/SadTalker/LivePortrait) ist NICHT mehr Standard: die Modelle
+# wurden vom Volume entfernt (Platz), die Nodes registrieren sich daher nicht mehr.
+# Fehlen sie, ist das kein Boot-Fehler - nur ein Hinweis.
+opt = ["Wav2Lip", "SadTalker", "LivePortraitProcess", "LivePortraitCropper",
+       "LivePortraitRetargeting", "LivePortraitComposite"]
+print("MISSING=" + ",".join(n for n in req if n not in d))
+print("OPTMISSING=" + ",".join(n for n in opt if n not in d))
 print("COUNT=%d" % len(d))
 PYEOF
 )
     MISS=$(echo "$RES" | sed -n 's/^MISSING=//p')
+    OMISS=$(echo "$RES" | sed -n 's/^OPTMISSING=//p')
     CNT=$(echo "$RES" | sed -n 's/^COUNT=//p')
     if [ -z "$MISS" ]; then ok "alle Kern-Nodes registriert ($CNT Nodes total)"; else bad "fehlende Nodes: $MISS"; fi
+    [ -n "$OMISS" ] && warn "Legacy-Nodes ohne Modelle (kein Standard mehr, kein Fehler): $OMISS"
 fi
 
 hdr "Python-Stack"
