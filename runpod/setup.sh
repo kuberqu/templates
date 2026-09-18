@@ -186,6 +186,24 @@ link_gen_models() {
                 ln -sfn "$f" "$MODELS_DIR/$base/$(basename "$f")" && n=$((n + 1)) ;;
         esac
     done < <(find "$GEN_STAGE" -mindepth 3 -maxdepth 3 -type f -name "*.safetensors" 2>/dev/null)
+
+    # --- LTX-2.5 braucht einen Teil der Gewichte zusaetzlich in models/checkpoints/ ---
+    # Verifiziert im Quellcode (comfy_extras/nodes_lt_audio.py):
+    #   LTXVAudioVAELoader   -> get_filename_list("checkpoints")   (Zeile 19/28)
+    #   LTXAVTextEncoderLoader -> text_encoders + checkpoints      (Zeile 180-200)
+    # Beide finden ihre Dateien sonst nicht und ComfyUI bricht mit
+    # "Value not in list: ckpt_name" bzw. der Audio-VAE fehlt komplett ab.
+    # Symlinks kosten keinen zusaetzlichen Plattenplatz.
+    for f in \
+        "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors" \
+        "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors" \
+        "vae/ltx-2.5-audio-vae-bf16.safetensors" \
+        "vae/ltx-2.5-video-vae-bf16.safetensors"; do
+        if [ -s "$GEN_STAGE/$f" ]; then
+            mkdir -p "$MODELS_DIR/checkpoints"
+            ln -sfn "$GEN_STAGE/$f" "$MODELS_DIR/checkpoints/$(basename "$f")" && n=$((n + 1))
+        fi
+    done
     echo "$n"
 }
 

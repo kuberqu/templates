@@ -34,6 +34,43 @@ Qwen-Image 2512) und FLUX.2 [dev] (Non-Commercial-Lizenz → Risiko bei
 monetarisierten Kanälen). NVFP4-Varianten fehlen ebenfalls: das ist ein
 Blackwell-Pfad, auf Ampere (A40/A6000) ist int8 die tragfähige Wahl.
 
+## LTX-2.5 lokal generieren (verifiziert 18.09.2026)
+
+```bash
+python /workspace/ltx_generate.py "Cinematic prompt in English" --w 768 --h 1344 --frames 121 --steps 8
+```
+`--frames 121` = 4,84 s bei 25 fps (LTX-2.5 erwartet Frames nach 8n+1, 9:16 via
+768x1344; beide Werte durch 32 teilbar). Ergebnis landet in ComfyUI/output/ltx_test/.
+Video **und** Audio (AAC 48 kHz) entstehen in einem Pass — kein zweiter Durchlauf.
+
+### Zielordner der LTX-Loader (Quelle: comfy_extras/nodes_lt_audio.py)
+
+| Datei | Ordner | Zusatz |
+|---|---|---|
+| ltx-2.5-22b-...convrot.safetensors | diffusion_models **+ checkpoints** | UNETLoader **und** LTXAVTextEncoderLoader |
+| gemma4-12b-with-proj-...safetensors | text_encoders **+ checkpoints** | enthält audio_projector + multi_modal_projector |
+| ltx-2.5-video-vae-bf16.safetensors | vae **+ checkpoints** | |
+| ltx-2.5-audio-vae-bf16.safetensors | vae **+ checkpoints** | LTXVAudioVAELoader liest NUR checkpoints |
+
+`link_gen_models()` in setup.sh legt diese Symlinks automatisch an (kostenlos).
+Ohne sie bricht jeder LTX-Workflow ab mit `Value not in list: ckpt_name`.
+
+### Bekannte Stolperfallen
+
+| Symptom | Ursache | Fix |
+|---|---|---|
+| `Value not in list: ckpt_name` (Node 7) | `LTXVAudioVAELoader` liest `models/checkpoints/` | Symlink (s. o.) |
+| `Required input is missing: vae_name` (Node 16) | `VAELoader` erwartet `vae_name`, nicht `ckpt_name` | im Workflow korrigieren |
+| Textencoder-Output "mush" | Alt-Pfad `DualCLIPLoader(type=ltxv)` + separate projection | `LTXAVTextEncoderLoader` nutzen |
+| `ok: false` trotz vollständiger Modelle | `stat -c %s` auf Symlink liefert die Symlink-Länge (~100 B) | `stat -L` verwenden |
+| Gen-Größenprüfung cmd in Phase 7 | s. `runpod/gen_report.sh` als Einzelprüfung | `bash /workspace/gen_report.sh` |
+
+### Messwerte A40 48 GB (gemessen 18.09.2026)
+
+* VRAM-Bedarf 5-s-Clip 768x1344 8 Steps: **43,5 GB von 46 GB** → knapp; fuer
+  laengere Clips `LTXVContextWindows` oder kleinere Basis-Aufloesung + Latent-Upscaler x2
+* Modell-Laden (20 GB LTX + 15 GB Gemma vom Netzwerk-Volume) dominiert den ersten Lauf
+
 ## Startcommand (RunPod Template / Pod-Konfiguration)
 
 ⚠️ **Wichtig:** Der Startcommand lädt `entrypoint.sh` bei JEDEM Pod-Boot von

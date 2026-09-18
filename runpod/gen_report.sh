@@ -49,6 +49,15 @@ check "$MODELS/vae/qwen_image_vae.safetensors" 100 "Qwen-Image VAE"
 check "$MODELS/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors" 10000 "Qwen-Image-Edit 2511 (int8)"
 check "$MODELS/loras/Qwen-Edit-2509-Multiple-angles.safetensors" 100 "LoRA: Multiple Angles"
 echo
+echo "--- LTX-Loader-Symlinks in models/checkpoints/ ---"
+# LTXVAudioVAELoader + LTXAVTextEncoderLoader lesen ausschließlich hier.
+for f in ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors \
+         gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors \
+         ltx-2.5-audio-vae-bf16.safetensors \
+         ltx-2.5-video-vae-bf16.safetensors; do
+    check "$MODELS/checkpoints/$f" 1 "checkpoints/$f"
+done
+echo
 echo "--- Reste abgebrochener Downloads (.aria2) ---"
 AR=$(find "$BASE/gen_models" -name "*.aria2" 2>/dev/null | wc -l)
 if [ "$AR" -eq 0 ]; then c_ok "keine Kontroll-Dateien"
