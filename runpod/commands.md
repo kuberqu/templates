@@ -65,11 +65,41 @@ Ohne sie bricht jeder LTX-Workflow ab mit `Value not in list: ckpt_name`.
 | `ok: false` trotz vollständiger Modelle | `stat -c %s` auf Symlink liefert die Symlink-Länge (~100 B) | `stat -L` verwenden |
 | Gen-Größenprüfung cmd in Phase 7 | s. `runpod/gen_report.sh` als Einzelprüfung | `bash /workspace/gen_report.sh` |
 
+### Der offizielle Graph ist die Referenz (nicht selbst bauen)
+
+`comfyui_workflow_templates_json/templates/video_ltx2_5_t2v.json` liegt im Pod und
+enthält als **Subgraph** (42 Nodes) den echten Workflow. Wer ihn nachbaut, MUSS
+diese sieben Punkte treffen — sonst ist die Tonspur stumm (live gemessen, vom
+Nutzer bestätigt: Bild und Ton synchron):
+
+| Parameter | offiziell (richtig) | falsch (Folge) |
+|---|---|---|
+| LTXVDualCFGGuider | **1.0 / 1.0** | 3.0 / 7.0 → Audio kollabiert (−91 dB statt −31,8 dB) |
+| Sigmas | ManualSigmas, 2 Stufen | LTXVScheduler, einstufig |
+| Sampler | **euler_ancestral** | euler |
+| Textencoder | CLIPLoader type=ltxv (text_encoders/) | LTXAVTextEncoderLoader (liest checkpoints/) |
+| Audio-VAE | VAELoader (vae/) | LTXVAudioVAELoader (liest checkpoints/) |
+| Decode | VAEDecodeTiled | VAEDecode |
+| fps | 24, Frames = s×24+1 | 25 |
+
+Ablauf: Basis-Sampling bei **halber** Zielauflösung → `LTXVSeparateAVLatent` →
+Video durch `LTXVLatentUpsampler` ×2 → wieder mit dem Audio-Latent
+`LTXVConcatAVLatent` → Refine-Sampling (Sigmas 0.85 → 0.0) → Decode.
+
+Fertige Umsetzung als API-Prompt: `runpod/ltx_official.py`
+(`python ltx_official.py "Prompt" --seconds 5 --width 720 --height 1280`).
+Die Sigma-Folgen stehen dort als `SIGMAS_STAGE1` / `SIGMAS_STAGE2`.
+
 ### Messwerte A40 48 GB (gemessen 18.09.2026)
 
 * VRAM-Bedarf 5-s-Clip 768x1344 8 Steps: **43,5 GB von 46 GB** → knapp; fuer
   laengere Clips `LTXVContextWindows` oder kleinere Basis-Aufloesung + Latent-Upscaler x2
 * Modell-Laden (20 GB LTX + 15 GB Gemma vom Netzwerk-Volume) dominiert den ersten Lauf
+* Offizieller 2-Stufen-Graph, 5 s @720×1280: **200 s** (3,3 Min) — schneller als der
+  einstufige 768×1344-Lauf (311 s), weil die Basis nur 360×640 rechnet
+* Ausgabe 704×1280 statt 720×1280 (Latent-Rundung auf 32er-Vielfache) — unkritisch
+* Tonspur mean −31,8 dB / Peak −14,0 dB; Bild und Ton synchron (Nutzerabnahme)
+  → ~40 Min Pod-Zeit pro 60-s-Short aus 12 Clips
 
 ## Startcommand (RunPod Template / Pod-Konfiguration)
 
