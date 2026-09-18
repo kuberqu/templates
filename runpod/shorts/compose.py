@@ -211,19 +211,27 @@ def main() -> None:
     write_wav(str(bed_path), bed * 0.22, sr)
 
     vf = "scale=1080:1920:flags=lanczos"
+    # WICHTIG: Ein Filter-Ausgang darf nur EINMAL als Eingang dienen. Die Narration
+    # wird deshalb per asplit geteilt - ein Zweig steuert das Ducking (Sidechain),
+    # der andere geht in den Mix. Ohne asplit bricht ffmpeg ab mit
+    # "Stream specifier 'nar' ... matches no streams".
+    DUCK = "sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400"
     if a.keep_ltx_audio:
         mix = ("[0:a]volume=-26dB[atmo];"
                "[1:a]volume=1.0[nar];"
                "[2:a]volume=0.5[mus];"
-               "[atmo][nar]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[nar_d];"
-               "[nar_d][mus]amix=inputs=2:duration=first:dropout_transition=0[mix]")
-        fcmap = ["-filter_complex", mix, "-map", "0:v", "-map", "[mix]"]
+               "[nar]asplit=2[nar_mix][nar_sc];"
+               f"[mus][nar_sc]{DUCK}[mus_duck];"
+               "[atmo][nar_mix][mus_duck]amix=inputs=3:duration=first:dropout_transition=0[mixp];"
+               "[mixp]loudnorm=I=-14:TP=-1.5:LRA=11[mix]")
     else:
         mix = ("[1:a]volume=1.0[nar];"
                "[2:a]volume=0.5[mus];"
-               "[nar][mus]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[d];"
-               "[nar][d]amix=inputs=2:duration=first:dropout_transition=0[mix]")
-        fcmap = ["-filter_complex", mix, "-map", "0:v", "-map", "[mix]"]
+               "[nar]asplit=2[nar_mix][nar_sc];"
+               f"[mus][nar_sc]{DUCK}[mus_duck];"
+               "[nar_mix][mus_duck]amix=inputs=2:duration=first:dropout_transition=0[mixp];"
+               "[mixp]loudnorm=I=-14:TP=-1.5:LRA=11[mix]")
+    fcmap = ["-filter_complex", mix, "-map", "0:v", "-map", "[mix]"]
 
     final = proj / "short_final.mp4"
     run(["ffmpeg", "-y", "-v", "error",
@@ -232,7 +240,6 @@ def main() -> None:
          "-vf", vf + f",subtitles={srt}",
          "-c:v", "libx264", "-preset", "medium", "-crf", "19", "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-         "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
          str(final)])
     print(f"FERTIG: {final}  {dur(str(final)):.2f}s")
 

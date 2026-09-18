@@ -130,6 +130,19 @@ Regeln, die sich bewährt haben:
   (sonst 0,3-s-Einblendungen, die niemand lesen kann).
 * `faster-whisper` gehört ins Setup (Phase 8f/8i) — sonst fällt der Schnitt auf die
   Szenentexte zurück, die pro Einblendung zu lang sind.
+* **ffmpeg-Fallen im Mischpfad** (beide live getroffen):
+  1. Ein Filterausgang darf nur EINMAL als Eingang dienen. Wer die Narration sowohl
+     in den Mix als auch als Sidechain-Steuerung schickt, braucht `asplit=2`, sonst
+     bricht ffmpeg ab mit `Stream specifier 'nar' ... matches no streams`.
+  2. `-af` (Simple-Filter) und `-filter_complex` dürfen nicht denselben Stream
+     bearbeiten: `loudnorm` muss in den Komplex-Filter hinein
+     (`...amix...[mixp];[mixp]loudnorm=...[mix]`), nicht als `-af` daneben.
+* **Abstrakte Motive nicht fotorealistisch verlangen.** Gemessen: „gastric mill"
+  liefert eine gekochte Krabbe auf dem Schneidebrett statt einer Präparation,
+  „sound waves propagating" eine Languste ohne Schallausbreitung. Konkrete Motive
+  (Hummer, Kabeljau, Panzer-Makro) funktionieren dagegen gut. Für Anatomie/Physik
+  entweder sehr konkrete Objektbeschreibungen („three white grinding teeth on a pale
+  surface, museum specimen") oder eine Infografik statt Fotorealismus.
 
 ### Charakter (wiederkehrende Figur)
 
