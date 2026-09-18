@@ -284,8 +284,11 @@ install_openmontage() {
         fi
 
         # 8f. Fehlende Runtime-Deps (make setup installiert sie NICHT)
-        "$UV_BIN" pip install --python "$OM_DIR/.venv/bin/python" -q aiohttp pydub edge-tts piper-tts \
-            && echo "✓ aiohttp/pydub/edge-tts/piper-tts" \
+        # faster-whisper: Wort-Timings fuer die Untertitel im Schnitt (compose.py).
+        # Fehlte nach dem Volume-Wechsel komplett -> Untertitel fielen auf die
+        # Szenentexte zurueck (unlesbar lang).
+        "$UV_BIN" pip install --python "$OM_DIR/.venv/bin/python" -q aiohttp pydub edge-tts piper-tts faster-whisper \
+            && echo "✓ aiohttp/pydub/edge-tts/piper-tts/faster-whisper" \
             || echo "⚠ OM Runtime-Deps fehlgeschlagen"
 
         # 8g. Piper-Voice (1.8.x: --download-dir existiert nicht mehr -> --data-dir)
@@ -312,7 +315,7 @@ print("✓ .env: COMFYUI-URLs = http://127.0.0.1:8188")
 PYEOF
 
         # 8i. Verifikation OM
-        "$OM_DIR/.venv/bin/python" -c "import aiohttp, pydub, edge_tts; print('✓ OM Runtime-Deps OK')" \
+        "$OM_DIR/.venv/bin/python" -c "import aiohttp, pydub, edge_tts, faster_whisper; print('✓ OM Runtime-Deps OK (inkl. faster-whisper)')" \
             || echo "⚠ OM Runtime-Deps-Verifikation fehlgeschlagen"
         echo "hello" | "$OM_DIR/.venv/bin/piper" -m en_US-lessac-medium --data-dir /root/.piper/voices -f /tmp/piper_check.wav >/dev/null 2>&1 \
             && { echo "✓ Piper TTS OK"; rm -f /tmp/piper_check.wav; } \
