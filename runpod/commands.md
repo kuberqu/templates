@@ -109,6 +109,21 @@ Laut Autor **muss** die LoRA zusammen mit Qwen-Image-Lightning laufen.
 * Für I2V das Startbild auf das Zielformat bringen (`scale=…:force_original_aspect_ratio=increase,crop=…`),
   sonst verzerrt der Latent.
 
+**Sprech-Test, gemessen (18.09.2026, 9,7 s Clip, A40, 560 s Laufzeit):**
+
+* `LTXVReferenceAudio` koppelt die Lippen an das Referenzaudio — der Mund artikuliert
+  sichtbar über den ganzen Clip. **Aber:** LTX gibt das Referenzaudio **nicht** als Tonspur
+  aus. Verifiziert per Hüllkurven-Korrelation (0,09) und Spektrum:
+  Referenz-Sprache hat 55 % Energie unter 1 kHz, die Videospur nur 26 % und 37 % über 3 kHz
+  (= Atmo/Rauschen). → **Narration kommt immer als separate Spur in den Schnitt**, Video
+  liefert nur Atmo.
+* Mimik-Prompt ist entscheidend: „speaks, lips and jaw moving naturally" ohne
+  Ausdrucksvorgabe erzeugte ein erschrockenes Gesicht (Brauen hoch, Augen weit, ovaler Mund).
+  Für einen ruhigen Host explizit vorgeben: *steady serious expression, relaxed eyebrows,
+  level gaze, moderate mouth movement, occasional slow blink, composed*.
+* Clipping beachten: die Videospur lag bei max 0,0 dB (Referenz −4,6 dB) → beim Mischen
+  im Schnitt Pegel absenken.
+
 ### Der offizielle Graph ist die Referenz (nicht selbst bauen)
 
 `comfyui_workflow_templates_json/templates/video_ltx2_5_t2v.json` liegt im Pod und
