@@ -169,8 +169,14 @@ fetch_repo_files() {
     if ! curl -fsSL -k --retry 3 --retry-delay 2 --connect-timeout 15 -o "$tarball" "$REPO_TARBALL" 2>/dev/null; then
         rm -rf "$tmpdir"; return 1
     fi
+    # Short-Pipeline (siehe commands.md): die Skripte muessen mit auf den Pod,
+    # sonst ist nach einem Volume-Neustart nur das Setup da und die Kette fehlt.
     for f in setup.sh boot_report.sh test_lp_smoke.py test_lipsync_smokes.py \
-             test_lp_retargeting.py om_talking_head.py presenter_example.srt commands.md; do
+             test_lp_retargeting.py om_talking_head.py presenter_example.srt commands.md \
+             make_narration.py make_images.py make_clips.py make_host_clips.py compose.py \
+             h3_lipsync.py qwen_portraits.py qwen_kanon.py qwen_host_female2.py \
+             build_dataset.py convert_lora.py fal_status.py \
+             finish_host_short.sh make_host_talk.sh short_script_beispiel.json; do
         if tar -xzOf "$tarball" "templates-main/runpod/$f" > "$tmpdir/$f" 2>/dev/null && [ -s "$tmpdir/$f" ]; then
             ok=$((ok + 1))
         else
