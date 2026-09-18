@@ -58,6 +58,13 @@ EXTRA_PKGS=(insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<202
 #     Fast-Boot auf intaktem Volume unverändert schnell bleibt (hf_get prüft
 #     mit -s und lädt nur fehlende Dateien).
 INSTALL_GEN="${INSTALL_GEN:-1}"
+# ---- Qwen-Block optional ----------------------------------------------------
+# Der Qwen-Image/-Edit-Satz ist ~52 GB. Auf einem reinen Host-Render-Pod wird er
+# nicht gebraucht (nur fuer Avatare, Kanon und Charakter-Datensaetze), und auf
+# kleinen Volumes passt er nicht neben den Wan-Satz (~52 GB).
+#   INSTALL_QWEN=0 -> Qwen ueberspringen; Boot ~20 statt ~35 Min, -52 GB
+# Gemessen 18.09.2026: Volumen mit 100 GB lief beim Qwen-Block voll.
+INSTALL_QWEN="${INSTALL_QWEN:-1}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-$BASE_DIR/.hf_token}"
 GEN_STAGE="$BASE_DIR/gen_models"          # hf download --local-dir (Staging)
 GEN_STATUS="$BASE_DIR/gen_models_status.json"
@@ -491,7 +498,9 @@ download_gen_models_background() {
     # ---- Qwen-Image 2512 + Qwen-Image-Edit 2511 (beide Apache-2.0, also
     # kommerziell frei). Edit + Multiple-Angles-LoRA ist der Weg zur
     # konsistenten Host-Figur (gleiche Identität, andere Blickwinkel/Szenen).
+    # Abschaltbar (INSTALL_QWEN=0), weil der Satz ~52 GB belegt.
     local qwen_ok=0 qwen_fail=0
+    if [ "$INSTALL_QWEN" = "1" ]; then
     local qwen_img=(
         "split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors"
         "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
@@ -517,6 +526,10 @@ download_gen_models_background() {
         && qwen_ok=$((qwen_ok + 1)) || { qwen_fail=$((qwen_fail + 1)); echo "   ⚠ Lightning-LoRA fehlgeschlagen"; }
     ok=$((ok + qwen_ok)); fail=$((fail + qwen_fail))
     echo "   Qwen (Image+Edit): $qwen_ok/$((qwen_ok + qwen_fail)) Dateien"
+    else
+        echo "   Qwen-Block uebersprungen (INSTALL_QWEN=0) — Avatare, Kanon und"
+        echo "   Charakter-Datensaetze brauchen ihn, Host-Render nicht."
+    fi
     # FLUX.1-schnell wurde bewusst NICHT aufgenommen: Stand 08/2024, überholt
     # durch Qwen-Image 2512 (Apache-2.0). FLUX.2 [dev] wäre qualitativ stärker,
     # ist aber Non-Commercial lizenziert — für monetarisierte Kanäle ein Risiko.
@@ -532,6 +545,13 @@ download_gen_models_background() {
         printf '{"installed": false, "reason": "partial", "linked": %s, "failed_patterns": %s, "seconds": %s}\n' \
             "$linked" "$fail" "$dur_s" > "$GEN_STATUS"
         echo "⚠ [gen] unvollständig: $linked verlinkt, $fail Muster fehlgeschlagen, ${dur_s}s"
+        # Haeufigste Ursache: das Volume ist voll. Die RunPod-QUOTA ist NICHT in
+        # df sichtbar (df zeigt den Shared-Pool mit Petabytes), deshalb hier der
+        # Klartext statt einer kryptischen aria2c-Meldung.
+        echo "   HINWEIS: meist ist das Volume voll (Quota, in df nicht sichtbar)."
+        echo "   Pruefen:  du -sh $BASE_DIR"
+        echo "   Bedarf:   Wan/InfiniteTalk ~52 GB + Qwen ~52 GB + venv ~16 GB + OpenMontage"
+        echo "   Abhilfe:  groesseres Volume ODER INSTALL_QWEN=0 (spart ~52 GB, Boot ~20 Min)"
     fi
     return 0
 }
