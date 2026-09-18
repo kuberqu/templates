@@ -827,10 +827,14 @@ fi
 # unverhaeltnismaessig). Greift nur, wenn die Phase wirklich installiert hat.
 if [ "$INSTALL_GEN" = "1" ] && grep -q '"installed": true' "$GEN_STATUS" 2>/dev/null; then
     gen_check() {
+        # WICHTIG: stat -L (dereference). Ohne -L liefert stat die Laenge des
+        # SYMLINKS (~100 Bytes) statt der Zieldatei -> der Check meldete am
+        # 18.09.2026 fuer jedes Modell "zu klein (0 MB)" und setzte ok=false,
+        # obwohl 85 GB korrekt geladen waren.
         local glob="$1" min_mb="$2" label="$3" f size
         f=$(ls -1 $glob 2>/dev/null | head -1)
         if [ -z "$f" ]; then phase_fail "Gen: $label fehlt"; return; fi
-        size=$(( $(stat -c %s "$f") / 1048576 ))
+        size=$(( $(stat -L -c %s "$f" 2>/dev/null || echo 0) / 1048576 ))
         if [ "$size" -ge "$min_mb" ]; then phase_ok "Gen: $label (${size} MB)"
         else phase_fail "Gen: $label zu klein (${size} MB)"; fi
     }
