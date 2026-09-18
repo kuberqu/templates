@@ -342,3 +342,32 @@ SadTalker schreibt `<timestamp>.mp4` direkt nach `output/` (kein history-Eintrag
 - Ergebnis wird mit der Original-H3-Audiospur gemuxt.
 - Env statt CLI: `LIPSYNC_POD`, `LIPSYNC_PORT`, `LIPSYNC_KEY`.
 
+
+## Lip-Sync (Wav2Lip) - drei Fallen, alle real aufgetreten
+
+**1. `mode` MUSS zur Quelle passen.** `sequential` verarbeitet jeden Frame genau
+einmal (Videosequenz), `repetitive` wiederholt das Bild, bis die Audiospur gefuellt
+ist (Standbild). Ein Standbild mit `sequential` ergibt EINEN Frame -> Video ohne
+jede Mundbewegung (Lauf "erfolgreich", Lippen steif). Der schlanke Smoke-Test deckt
+das NICHT auf: er prueft nur, dass ein Video entsteht. Immer die Mundbewegung messen
+(Frame-zu-Frame-Differenz im Mundbereich; Sprechen liegt deutlich ueber 10).
+
+**2. Vorlage: neutrales Portrait, Mund geschlossen.** Ein Bild mit bereits offenem
+Mund (z.B. aus einem LTX-Sprech-Prompt) laesst Wav2Lip kaum Spielraum. Grosses,
+frontales Gesicht (65-70 % der Bildhoehe) ist optimal - dann rendert Wav2Lip auch
+schnell: 92 s statt 382 s fuer dieselben 3 s Audio (s3fd-Face-Detection findet das
+Gesicht sofort). Wav2Lip ist CPU-lastig, GPU-Auslastung nahe 0 ist normal.
+
+**3. ComfyUI ignoriert "/" im `filename_prefix`.** `filename_prefix: "ordner/name"`
+legt die Datei NICHT in einen Unterordner, sondern als `ordner_name_00001_.png`
+flach in `ComfyUI/output/`. Abhol-Skripte muessen dort suchen, sonst greifen sie
+ins Leere (heute zweimal passiert).
+
+## LTX-Referenzaudio ist KEINE Sprachquelle
+
+`LTXVReferenceAudio` uebernimmt aus der Referenz-WAV nur den Stimmcharakter, den
+TEXT erfindet das Modell neu. Gemessen: Skript sagte "Dieser Hummer knurrt. Aber
+nicht mit dem Maul", der Clip sagte "Aber jetzt brauche ich allen Gord". Fuer
+Szenen mit vorgegebenem Text daher: Wav2Lip (Pod hat Wav2Lip/SadTalker/LivePortrait)
+ueber `runpod/h3_lipsync.py --audio <wav> --face <bild> --mode presenter`.
+Host-Szenen: Wav2Lip. B-Roll ohne Mund: LTX, Sync ist dort irrelevant.

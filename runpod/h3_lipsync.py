@@ -196,13 +196,20 @@ def face_check(pod: str, port: int, key: str, frames: list[str]) -> list[dict]:
 
 
 # ---------------------------------------------------------------- Workflows
-def wf_wav2lip(source_node: str, audio_node: str, prefix: str, frames: int | None = None) -> dict:
-    """source_node = Node-ID, deren Slot 0 IMAGE liefert (LoadImage oder VHS_LoadVideo)."""
+def wf_wav2lip(source_node: str, audio_node: str, prefix: str,
+               mode: str = "sequential") -> dict:
+    """source_node = Node-ID, deren Slot 0 IMAGE liefert (LoadImage oder VHS_LoadVideo).
+
+    mode MUSS zur Quelle passen: "sequential" verarbeitet jeden Frame genau einmal
+    (Videosequenz), "repetitive" wiederholt das Bild, bis die Audiospur gefuellt ist
+    (Standbild). Ein Standbild mit "sequential" ergibt EINEN Frame und damit ein
+    Video ohne jede Mundbewegung - genau das war der Fehler.
+    """
     return {
         "1": {"class_type": "LoadAudio", "inputs": {"audio": audio_node}},
         "3": {"class_type": "Wav2Lip", "inputs": {
             "images": [source_node, 0], "audio": ["1", 0],
-            "mode": "sequential", "face_detect_batch": 8}},
+            "mode": mode, "face_detect_batch": 8}},
         "4": {"class_type": "VHS_VideoCombine", "inputs": {
             "images": ["3", 0], "audio": ["3", 1], "frame_rate": 25.0,
             "loop_count": 0, "filename_prefix": prefix,
@@ -221,7 +228,8 @@ def wf_direct(clip: str, audio: str, fps: float, frames: int, prefix: str) -> di
 
 
 def wf_presenter(face: str, audio: str, fps: float, prefix: str) -> dict:
-    wf = wf_wav2lip("2", audio, prefix)
+    # Standbild -> repetitive, sonst bewegt sich der Mund nicht
+    wf = wf_wav2lip("2", audio, prefix, mode="repetitive")
     wf["2"] = {"class_type": "LoadImage", "inputs": {"image": face}}
     wf["4"]["inputs"]["frame_rate"] = fps
     return wf
