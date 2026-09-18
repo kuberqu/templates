@@ -221,6 +221,10 @@ link_gen_models() {
     # models/checkpoints/) ist am 18.09.2026 entfallen — LTX-2.5 wird nicht mehr
     # auf dem Pod vorgehalten (Volume-Quota 200 GB). Wer LTX wieder braucht:
     # Repo Lightricks/LTX-2.5, siehe RESTORE_LTX.txt.
+    # Tote Symlinks entfernen: zeigen auf geloeschte Ziele (z.B. nach dem
+    # LTX-Rueckbau). ComfyUI listet sie sonst in der Modellauswahl und scheitert
+    # erst beim Laden ("file not found" beim Render statt beim Start).
+    find "$MODELS_DIR" -xtype l -delete 2>/dev/null
     echo "$n"
 }
 
@@ -899,10 +903,16 @@ if [ "$INSTALL_GEN" = "1" ] && grep -q '"installed": true' "$GEN_STATUS" 2>/dev/
     gen_check "$MODELS_DIR/clip_vision/clip_vision_h.safetensors" 500 "CLIP-Vision (Wan)"
     gen_check "$MODELS_DIR/audio_encoders/wav2vec2-chinese-base_fp16.safetensors" 100 "wav2vec2-Audioencoder"
     gen_check "$MODELS_DIR/loras/lightx2v_I2V_14B_480p*.safetensors" 300 "lightx2v-I2V-LoRA"
-    gen_check "$MODELS_DIR/diffusion_models/qwen_image_2512*.safetensors" 10000 "Qwen-Image 2512"
-    gen_check "$MODELS_DIR/diffusion_models/qwen_image_edit_2511_int8*.safetensors" 10000 "Qwen-Image-Edit 2511"
-    gen_check "$MODELS_DIR/loras/Qwen-Edit*-Multiple-angles.safetensors" 100 "Multiple-Angles-LoRA"
-    gen_check "$MODELS_DIR/loras/Qwen-Image-Edit-2511-Lightning-4steps*.safetensors" 300 "Lightning-4steps-LoRA"
+    # Qwen-Satz nur pruefen, wenn er installiert werden sollte — sonst meldet der
+    # Boot bei INSTALL_QWEN=0 vier Fehler, obwohl nichts fehlt (real passiert).
+    if [ "$INSTALL_QWEN" = "1" ]; then
+        gen_check "$MODELS_DIR/diffusion_models/qwen_image_2512*.safetensors" 10000 "Qwen-Image 2512"
+        gen_check "$MODELS_DIR/diffusion_models/qwen_image_edit_2511_int8*.safetensors" 10000 "Qwen-Image-Edit 2511"
+        gen_check "$MODELS_DIR/loras/Qwen-Edit*-Multiple-angles.safetensors" 100 "Multiple-Angles-LoRA"
+        gen_check "$MODELS_DIR/loras/Qwen-Image-Edit-2511-Lightning-4steps*.safetensors" 300 "Lightning-4steps-LoRA"
+    else
+        phase_ok "Gen: Qwen-Satz uebersprungen (INSTALL_QWEN=0)"
+    fi
 fi
 
 # ------------------------------------------------------------
