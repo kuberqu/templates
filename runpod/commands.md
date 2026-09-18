@@ -65,6 +65,50 @@ Ohne sie bricht jeder LTX-Workflow ab mit `Value not in list: ckpt_name`.
 | `ok: false` trotz vollständiger Modelle | `stat -c %s` auf Symlink liefert die Symlink-Länge (~100 B) | `stat -L` verwenden |
 | Gen-Größenprüfung cmd in Phase 7 | s. `runpod/gen_report.sh` als Einzelprüfung | `bash /workspace/gen_report.sh` |
 
+### Charakter (wiederkehrende Figur)
+
+Zwei Werkzeuge, beide laufen über den offiziellen Qwen-Image-Pfad:
+
+| Skript | Zweck | Parameter |
+|---|---|---|
+| `runpod/qwen_portraits.py` | Typ-Auswahl: 6 Portraits eines Typs (T2I) | 1024×1024, ModelSamplingAuraFlow shift=3.1, 20 Steps/cfg 4 (der Lightning-Pfad des Templates braucht ein separates LoRA) |
+| `runpod/qwen_kanon.py` | Kanon aus **einem** Basisbild: 6 Kamera-Ansichten (Edit 2511) | 4 Steps/cfg 1.0 mit Lightning + Multiple-Angles-LoRA, ~24 s pro Bild auf der A40 |
+
+Multiple-Angles-LoRA (`dx8152/Qwen-Edit-2509-Multiple-angles`): **keine Trigger-Wörter**,
+sondern Kamera-Kommandos — zuverlässig in chinesischer Form:
+`将镜头向左旋转45度` (45° links) · `将镜头向右旋转45度` (45° rechts) · `将镜头向左移动` ·
+`将镜头转为特写镜头` (Close-up) · `将镜头转为广角镜头` (Weitwinkel) · `将镜头转为俯视` (Top-down).
+Laut Autor **muss** die LoRA zusammen mit Qwen-Image-Lightning laufen.
+
+### Trainings-Datensatz für ein Charakter-LoRA
+
+`runpod/build_dataset.py` erzeugt 18 Variationen (Winkel, Outfits, Umgebungen, Distanzen)
+**plus Captions** im Format `<name>.png` + `<name>.txt`, danach ZIP.
+
+* Captions beschreibend schreiben — **keine** Token wie `TOK`/`sks`: Qwen lernt durch
+  Überschreiben beschreibender Konzepte, abstrakte Platzhalter funktionieren nicht.
+* Datensatzgröße: 15–30 Bilder für Charaktere (laut fal.ai), Aspect-Ratio-Bucketing
+  übernimmt der Trainer.
+* Externe Trainer (Stand 18.09.2026): `fal-ai/qwen-image-2512-trainer` (T2I, 2000 Steps
+  ≈ 8 USD — Figur danach direkt per Text in neuen Szenen), `fal-ai/qwen-image-edit-2511-trainer`
+  (Edit, $4/1000 Steps), `fal-ai/ltx2-video-trainer` (Video-LoRA, $0,0048/Step);
+  alternativ Replicate `qwen-image-lora-trainer` (H100, 15–30 Min).
+* **LoRA-Downloads immer prüfen:** Dateien < 1 MB sind Trümmer (abgeschnitten bzw. falscher
+  Repo-Pfad). Beispiel: die Angles-LoRA liegt als `镜头转换.safetensors` im Repo —
+  mit falschem Dateinamen liefert HF 82 Bytes Müll, und ComfyUI scheitert still.
+
+### Video aus der Figur: I2V und Sprechen
+
+| Skript | Zweck | Besonderheiten |
+|---|---|---|
+| `runpod/ltx_i2v.py` | Kanon-Bild → Video (offizieller I2V-Graph) | `LTXVPreprocess(img_compression 18)` → `LTXVImgToVideoInplace(strength 0.7)`, sonst wie T2V |
+| `runpod/ltx_talk.py` | Figur **spricht** (Lippen an Referenzaudio) | `LTXVReferenceAudio` sitzt zwischen Modell und Guider und liefert MODEL + positive + negative; `identity_guidance_scale 3.0` |
+
+* Videolänge an die Audiolänge koppeln: `Frames = Sekunden × 24 + 1`, auf 8n+1 gerundet
+  (9,7 s → 233 Frames). Sonst laufen Lippen und Sprache auseinander.
+* Für I2V das Startbild auf das Zielformat bringen (`scale=…:force_original_aspect_ratio=increase,crop=…`),
+  sonst verzerrt der Latent.
+
 ### Der offizielle Graph ist die Referenz (nicht selbst bauen)
 
 `comfyui_workflow_templates_json/templates/video_ltx2_5_t2v.json` liegt im Pod und
