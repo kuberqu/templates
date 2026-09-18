@@ -371,6 +371,45 @@ Also: Prefix ohne Slash (`weiblich2_`) und die Dateien anschliessend umbenennen.
 `LTXVReferenceAudio` uebernimmt aus der Referenz-WAV nur den Stimmcharakter, den
 TEXT erfindet das Modell neu. Gemessen: Skript sagte "Dieser Hummer knurrt. Aber
 nicht mit dem Maul", der Clip sagte "Aber jetzt brauche ich allen Gord". Fuer
-Szenen mit vorgegebenem Text daher: Wav2Lip (Pod hat Wav2Lip/SadTalker/LivePortrait)
-ueber `runpod/h3_lipsync.py --audio <wav> --face <bild> --mode presenter`.
-Host-Szenen: Wav2Lip. B-Roll ohne Mund: LTX, Sync ist dort irrelevant.
+Szenen mit vorgegebenem Text daher: **InfiniteTalk** (siehe unten) ueber
+`runpod/run_wan_talk.py it`, B-Roll ohne Mund: LTX, Sync ist dort irrelevant.
+
+## Host-Talking-Head: InfiniteTalk statt Wav2Lip (18.09.2026)
+
+Wav2Lip erzeugt nur eine **96x96-Mundregion** und interpoliert sie ins Zielbild - bei
+832x1216 ist das Faktor 8,7 Vergroesserung, das Gesicht wirkt wachsartig. Das ist die
+Architektur, kein Einstellungsfehler. Ersatz: **InfiniteTalk** (Wan 2.1 I2V 480p +
+Audio-Patch), in ComfyUI >=0.36 nativ als `WanInfiniteTalkToVideo` vorhanden.
+
+Modell-Dateien + Repos stehen in `setup.sh` (Gen-Phase). Audio-Encoder ist der
+**chinesische** wav2vec2-Base (`Kijai/wav2vec2_safetensors`) - das ist die Wahl des
+offiziellen Templates, NICHT der englische `wav2vec2_large_english` aus dem
+Comfy-Org-Repo. Deutsche Phoneme liefen damit sauber synchron (vom Nutzer abgenommen).
+
+Werte = offizielles Template `video_wan2_1_infinitetalk.json`:
+`ModelSamplingSD3 shift 8` -> LoRA `lightx2v_I2V_14B_480p_...rank64` @1.0 ->
+`WanInfiniteTalkToVideo(mode=single_speaker, motion_frame_count=9, audio_scale=1.0)` ->
+negativ = **`ConditioningZeroOut` des positiven Conditionings** -> KSampler
+**6 Steps, cfg 1.0, euler, scheduler "normal"** -> `CreateVideo(fps=25)`.
+Laenge = **4n+1** Frames bei **25 fps**. Gemessen: 3,08 s @480x832 in **250 s** kalt.
+
+Fallstricke (real getroffen):
+- `CLIPVisionLoader` erwartet den Eingang **`clip_name`** (`clip_vision_name` ->
+  `required_input_missing`).
+- ComfyUI 0.36 nutzt das **V3-Node-Schema**: `inspect.getsource(cls.INPUT_TYPES)` zeigt nur
+  den Wrapper. Eingaben immer per **`GET /object_info/<Node>`** erfragen.
+- `bc` ist auf dem Pod **nicht installiert** -> Arithmetik in Shell-Skripten mit `awk`.
+
+## Volume-Quota: `df` luegt, `du` zaehlt
+
+`df -h /workspace` zeigt den Shared-Storage-Pool (756 TB), **nicht** die Quote. Die liegt bei
+**200 GB** und war bei 97 %, waehrend `df` 75 % Pool-Auslastung meldete. Wahrheit: `du -sh
+/workspace`. Entlastung: LTX-2.5-Stack + obsolete LipSync-Modelle (Wav2Lip/SadTalker/
+LivePortrait, zusammen 39 GB). Das Staging liegt in `/workspace/gen_models` und wird per
+Symlink in `ComfyUI/models/` gehaengt - beim Loeschen tote Symlinks mit
+`find /workspace/ComfyUI/models -xtype l -delete` entfernen, sonst listet ComfyUI Dateien,
+die beim Laden fehlschlagen.
+
+**Download-Resume kann Dateien korrumpieren:** `curl -C -` erzeugte eine **23,1 GB** grosse
+Datei, wo 16,4 GB erwartet waren. Nach jedem Download die Byte-Groesse gegen den
+Sollwert pruefen; eine zu grosse Datei faellt sonst erst beim Modell-Load auf.
