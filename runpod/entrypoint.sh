@@ -293,8 +293,10 @@ fi
 
 mkdir -p "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints" \
          "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints"
-ln -sf "$MODELS_DIR"/wav2lip/*   "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints/" 2>/dev/null || true
-ln -sf "$MODELS_DIR"/sadtalker/* "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints/" 2>/dev/null || true
+# Modelle von Wav2Lip/SadTalker sind bewusst nicht mehr auf dem Volume -> ohne die
+# Existenzprüfung legt `ln` einen Symlink mit literalem "*" als Namen an.
+[ -d "$MODELS_DIR/wav2lip" ]   && ln -sf "$MODELS_DIR"/wav2lip/*   "$NODES_DIR/ComfyUI_wav2lip/Wav2Lip/checkpoints/" 2>/dev/null || true
+[ -d "$MODELS_DIR/sadtalker" ] && ln -sf "$MODELS_DIR"/sadtalker/* "$NODES_DIR/Comfyui-SadTalker/SadTalker/checkpoints/" 2>/dev/null || true
 ln -sfn "$MODELS_DIR/liveportrait" "$NODES_DIR/ComfyUI-LivePortrait/pretrained_weights" 2>/dev/null || true
 ln -sfn "$MODELS_DIR/insightface"  "$NODES_DIR/ComfyUI-LivePortrait/insightface" 2>/dev/null || true
 
@@ -381,20 +383,32 @@ if [ "$SERVER_READY" = "1" ]; then
     "$VENV_DIR/bin/python" - > /tmp/node_check.txt 2>&1 <<'PYEOF' || true
 import json, urllib.request
 data = json.load(urllib.request.urlopen("http://127.0.0.1:8188/object_info", timeout=60))
-required = ["Wav2Lip", "SadTalker", "LivePortraitProcess"]
-missing = [n for n in required if n not in data]
-print("MISSING=" + ",".join(missing))
+# Standard ist der InfiniteTalk-Host (Wan 2.1 I2V + Audio-Patch) + Video-IO + Upscale.
+required = ["WanInfiniteTalkToVideo", "AudioEncoderLoader", "AudioEncoderEncode",
+            "ModelPatchLoader", "CLIPVisionLoader", "CreateVideo", "SaveVideo",
+            "VHS_LoadVideo", "VHS_VideoCombine", "UpscaleModelLoader", "ImageUpscaleWithModel"]
+# Legacy (Wav2Lip/SadTalker/LivePortrait): Modelle bewusst vom Volume entfernt, daher
+# fehlen die Nodes. Kein Boot-Fehler, nur ein Hinweis im Statusfile.
+legacy = ["Wav2Lip", "SadTalker", "LivePortraitProcess", "LivePortraitCropper",
+          "LivePortraitRetargeting", "LivePortraitComposite"]
+print("MISSING=" + ",".join(n for n in required if n not in data))
+print("LEGACY=" + ",".join(n for n in legacy if n not in data))
 print("COUNT=" + str(len(data)))
 PYEOF
     cat /tmp/node_check.txt
     MISSING=$(sed -n 's/^MISSING=//p' /tmp/node_check.txt)
+    LEGACY=$(sed -n 's/^LEGACY=//p' /tmp/node_check.txt)
     NODE_COUNT=$(sed -n 's/^COUNT=//p' /tmp/node_check.txt)
     if [ -z "$MISSING" ]; then
-        c_ok "Alle Kern-LipSync-Nodes registriert (Wav2Lip, SadTalker, LivePortraitProcess) — $NODE_COUNT Nodes total"
+        c_ok "Alle Kern-Nodes registriert (InfiniteTalk/Wan, VHS, Upscale) — $NODE_COUNT Nodes total"
         NODES_STATUS="ok"
     else
         c_err "Fehlende Nodes: $MISSING"
         NODES_STATUS="missing:$MISSING"
+    fi
+    if [ -n "$LEGACY" ]; then
+        c_warn "Legacy-Nodes ohne Modelle (kein Standard mehr): $LEGACY"
+        [ "$NODES_STATUS" = "ok" ] && NODES_STATUS="ok;legacy:$LEGACY"
     fi
     GPU_INFO=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1)
     OM_INFO="-"
