@@ -358,10 +358,13 @@ frontales Gesicht (65-70 % der Bildhoehe) ist optimal - dann rendert Wav2Lip auc
 schnell: 92 s statt 382 s fuer dieselben 3 s Audio (s3fd-Face-Detection findet das
 Gesicht sofort). Wav2Lip ist CPU-lastig, GPU-Auslastung nahe 0 ist normal.
 
-**3. ComfyUI ignoriert "/" im `filename_prefix`.** `filename_prefix: "ordner/name"`
-legt die Datei NICHT in einen Unterordner, sondern als `ordner_name_00001_.png`
-flach in `ComfyUI/output/`. Abhol-Skripte muessen dort suchen, sonst greifen sie
-ins Leere (heute zweimal passiert).
+**3. NIEMALS "/" im `filename_prefix`.** Drei Folgen, alle real erlebt:
+(a) Die Datei landet NICHT in einem Unterordner, sondern flach in `ComfyUI/output/`.
+(b) Der Zaehler springt nicht weiter: bei mehreren Bildern im selben Lauf
+    ueberschreibt jede Generierung `..._00001_.png` - fuenf von sechs Bildern waren
+    so verloren. Ohne Slash zaehlt ComfyUI korrekt hoch (00001, 00002, ...).
+(c) Abhol-Skripte suchen dann am falschen Ort und liefern stillschweigend nichts.
+Also: Prefix ohne Slash (`weiblich2_`) und die Dateien anschliessend umbenennen.
 
 ## LTX-Referenzaudio ist KEINE Sprachquelle
 
