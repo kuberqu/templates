@@ -61,9 +61,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--lora", default="charakter_qwen2512.safetensors")
     ap.add_argument("--seed", type=int, default=900)
+    ap.add_argument("--strength", type=float, default=0.7,
+                    help="LoRA-Staerke (Nutzer-Standard 0.6-0.8, nicht 1.0)")
     a = ap.parse_args()
 
-    cases = [("ohne", None, 0.0), ("1.0", a.lora, 1.0), ("0.8", a.lora, 0.8)]
+    st = round(a.strength, 2)
+    # Vergleichsfälle: ohne LoRA, gewaehlte Staerke, ein Referenzwert auerhalb
+    # des gewaehlten Bereichs (0.6-0.8 ist Nutzer-Standard, nicht 1.0)
+    ref = 0.8 if st != 0.8 else 0.6
+    cases = [("ohne", None, 0.0), (f"{st}", a.lora, st), (f"{ref}", a.lora, ref)]
     for name, lora, st in cases:
         # Prefix je Fall, damit die Dateien unterscheidbar sind
         g = graph(PROMPT, a.seed, lora, st)
