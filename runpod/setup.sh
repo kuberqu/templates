@@ -48,14 +48,15 @@ PIN_NUMPY="numpy==1.26.4"
 PIN_MEDIAPIPE="mediapipe==0.10.21"
 EXTRA_PKGS=(insightface onnxruntime soundfile scipy "librosa<0.11" "tifffile<2024.5")
 
-# ---- Generative Modelle (LTX-2.5 + FLUX) -----------------------------------
-# Der LipSync-Kern kommt ohne diese Modelle aus. Die Gen-Phase ist:
+# ---- Generative Modelle (Wan/InfiniteTalk + Qwen-Image/-Edit) ---------------
+# Der Host-Renderer und die Bildgenerierung brauchen diese Modelle (zusammen
+# ~65 GB). Die Gen-Phase ist:
 #   * abschaltbar mit INSTALL_GEN=0
-#   * selbstüberspringend, wenn kein HF-Token vorliegt (LTX-2.5 ist ein GATED
-#     Repo: ohne Token liefert Hugging Face 401, der Pod würde sonst scheitern)
+#   * token-OPTIONAL: die genutzten Repos (Comfy-Org, Kijai, lightx2v) sind
+#     öffentlich; ein Token wird nur für gated Repos gebraucht (Lightricks/LTX-2.5)
 #   * rein additiv — sie startet als eigene Hintergrund-Phase, damit der
-#     Fast-Boot auf intaktem Volume unverändert schnell bleibt (fast_download
-#     prüft mit -s und lädt nur fehlende Dateien).
+#     Fast-Boot auf intaktem Volume unverändert schnell bleibt (hf_get prüft
+#     mit -s und lädt nur fehlende Dateien).
 INSTALL_GEN="${INSTALL_GEN:-1}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-$BASE_DIR/.hf_token}"
 GEN_STAGE="$BASE_DIR/gen_models"          # hf download --local-dir (Staging)
@@ -165,12 +166,34 @@ hf_fetch() {
     fi
 }
 
+# hf_get <zielpfad> <repo> <repo-pfad>
+# Wie hf_fetch, aber mit OPTIONALEM Token. Alle hier genutzten Repos
+# (Comfy-Org/Wan_*, Comfy-Org/Qwen-*, Kijai/*, lightx2v/*) sind oeffentlich —
+# am 18.09.2026 mit reinem curl ohne Authorization-Header verifiziert (~70 MB/s).
+# Nur GATED Repos (z.B. Lightricks/LTX-2.5) brauchen zwingend einen Token.
+hf_get() {
+    local target="$1" repo="$2" sub="$3" tok url args=()
+    if [ -s "$target" ]; then echo "   vorhanden: $(basename "$target")"; return 0; fi
+    tok="$(hf_token 2>/dev/null || true)"
+    [ -n "$tok" ] && args=(-H "Authorization: Bearer $tok")
+    url="https://huggingface.co/$repo/resolve/main/$sub"
+    mkdir -p "$(dirname "$target")"
+    if command -v aria2c >/dev/null 2>&1; then
+        aria2c -q -c -x 16 -s 16 -k 1M --timeout=60 --connect-timeout=20 \
+            --max-tries=5 --retry-wait=5 --check-certificate=false \
+            -d "$(dirname "$target")" -o "$(basename "$target")" "$url" \
+        || curl -k -L -f --retry 5 --connect-timeout 20 ${args[@]+"${args[@]}"} -o "$target" "$url"
+    else
+        curl -k -L -f --retry 5 --connect-timeout 20 ${args[@]+"${args[@]}"} -o "$target" "$url"
+    fi
+}
+
 # Verlinkt alle gestagten Dateien in die ComfyUI-Modellordner (flach, wie die
 # Symlink-Konvention der LipSync-Modelle). Erkennt auch split_files/-Layouts
 # des Comfy-Org-Repackagings, weil nach dem Elternordner-Namen zugeordnet wird.
 link_gen_models() {
     local n=0 d f base target
-    for d in diffusion_models vae text_encoders clip loras unet latent_upscale_models model_patches; do
+    for d in diffusion_models vae text_encoders clip loras unet latent_upscale_models model_patches audio_encoders clip_vision; do
         [ -d "$GEN_STAGE/$d" ] || continue
         for f in "$GEN_STAGE/$d"/*; do
             [ -f "$f" ] || continue
@@ -181,29 +204,16 @@ link_gen_models() {
     while IFS= read -r f; do
         base="$(basename "$(dirname "$f")")"
         case "$base" in
-            diffusion_models|vae|text_encoders|clip|loras|unet|latent_upscale_models|model_patches)
+            diffusion_models|vae|text_encoders|clip|loras|unet|latent_upscale_models|model_patches|audio_encoders|clip_vision)
                 mkdir -p "$MODELS_DIR/$base"
                 ln -sfn "$f" "$MODELS_DIR/$base/$(basename "$f")" && n=$((n + 1)) ;;
         esac
     done < <(find "$GEN_STAGE" -mindepth 3 -maxdepth 3 -type f -name "*.safetensors" 2>/dev/null)
 
-    # --- LTX-2.5 braucht einen Teil der Gewichte zusaetzlich in models/checkpoints/ ---
-    # Verifiziert im Quellcode (comfy_extras/nodes_lt_audio.py):
-    #   LTXVAudioVAELoader   -> get_filename_list("checkpoints")   (Zeile 19/28)
-    #   LTXAVTextEncoderLoader -> text_encoders + checkpoints      (Zeile 180-200)
-    # Beide finden ihre Dateien sonst nicht und ComfyUI bricht mit
-    # "Value not in list: ckpt_name" bzw. der Audio-VAE fehlt komplett ab.
-    # Symlinks kosten keinen zusaetzlichen Plattenplatz.
-    for f in \
-        "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors" \
-        "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors" \
-        "vae/ltx-2.5-audio-vae-bf16.safetensors" \
-        "vae/ltx-2.5-video-vae-bf16.safetensors"; do
-        if [ -s "$GEN_STAGE/$f" ]; then
-            mkdir -p "$MODELS_DIR/checkpoints"
-            ln -sfn "$GEN_STAGE/$f" "$MODELS_DIR/checkpoints/$(basename "$f")" && n=$((n + 1))
-        fi
-    done
+    # Hinweis: Der frühere LTX-2.5-Block (zusaetzliche Symlinks nach
+    # models/checkpoints/) ist am 18.09.2026 entfallen — LTX-2.5 wird nicht mehr
+    # auf dem Pod vorgehalten (Volume-Quota 200 GB). Wer LTX wieder braucht:
+    # Repo Lightricks/LTX-2.5, siehe RESTORE_LTX.txt.
     echo "$n"
 }
 
@@ -356,7 +366,7 @@ else
         || c_warn "ComfyUI git pull übersprungen (lokale Änderungen/offline) — fahre fort"
 fi
 
-mkdir -p "$MODELS_DIR"/{checkpoints,vae,clip,loras,upscale_models,insightface/models,wav2lip,sadtalker,liveportrait,gfpgan,facexlib,diffusion_models}
+mkdir -p "$MODELS_DIR"/{checkpoints,vae,clip,loras,upscale_models,insightface/models,gfpgan,facexlib,diffusion_models,text_encoders,audio_encoders,clip_vision,model_patches,latent_upscale_models}
 
 # ------------------------------------------------------------
 # 2. Modell-Downloads (aria2c mit curl-Fallback)
@@ -382,17 +392,13 @@ fast_download() {
 
 download_models_background() {
     echo "--> [parallel] Modell-Downloads gestartet"
-    # Wav2Lip
-    fast_download "$MODELS_DIR/wav2lip/wav2lip.pth"           "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
-    fast_download "$MODELS_DIR/wav2lip/wav2lip_gan.pth"       "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip_gan.pth"
-    fast_download "$MODELS_DIR/wav2lip/s3fd-619a316847.pth"   "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/s3fd-619a316812.pth"
-    # LivePortrait
-    for file in appearance_feature_extractor.safetensors motion_extractor.safetensors \
-                spade_generator.safetensors warping_module.safetensors \
-                stitching_retargeting_module.safetensors landmark.onnx; do
-        fast_download "$MODELS_DIR/liveportrait/$file" "https://huggingface.co/Kijai/LivePortrait_safetensors/resolve/main/$file"
-    done
-    # InsightFace Buffalo_L
+    # ---- Am 18.09.2026 ausgeduennt (Volume-Quota 200 GB) -----------------------
+    # ENTFERNT: Wav2Lip (96x96-Mundregion -> Brei beim Hochskalieren),
+    #           SadTalker (Qualitaet weit unter allen Alternativen),
+    #           LivePortrait (videogetrieben, unser Weg ist audiogetrieben),
+    #           LTX-Video-2b + SD-VAE (alte LTX-Phase, ersetzt durch LTX-2.5/Wan).
+    # Der Host-Renderer ist jetzt InfiniteTalk (siehe download_gen_models_background).
+    # ---- InsightFace Buffalo_L (Gesichtserkennung/Pruefung, h3_lipsync.py) ----
     if [ ! -f "$MODELS_DIR/insightface/models/buffalo_l/det_10g.onnx" ]; then
         mkdir -p "$MODELS_DIR/insightface/models"
         curl -k -L -f --retry 5 -o "$MODELS_DIR/insightface/models/buffalo_l.zip" \
@@ -400,33 +406,26 @@ download_models_background() {
         && unzip -o -q "$MODELS_DIR/insightface/models/buffalo_l.zip" -d "$MODELS_DIR/insightface/models/buffalo_l" \
         && rm -f "$MODELS_DIR/insightface/models/buffalo_l.zip"
     fi
-    # SadTalker
-    fast_download "$MODELS_DIR/sadtalker/SadTalker_V0.0.2_256.safetensors" "https://huggingface.co/camenduru/SadTalker/resolve/main/new/checkpoints/SadTalker_V0.0.2_256.safetensors"
-    fast_download "$MODELS_DIR/sadtalker/SadTalker_V0.0.2_512.safetensors" "https://huggingface.co/camenduru/SadTalker/resolve/main/new/checkpoints/SadTalker_V0.0.2_512.safetensors"
-    fast_download "$MODELS_DIR/sadtalker/mapping_00109-model.pth.tar" "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00109-model.pth.tar"
-    fast_download "$MODELS_DIR/sadtalker/mapping_00229-model.pth.tar" "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00229-model.pth.tar"
-    # GFPGAN & FaceXLib
+    # ---- GFPGAN & FaceXLib (~0,4 GB): optionale Gesichts-Restauration ----------
     fast_download "$MODELS_DIR/gfpgan/GFPGANv1.4.pth" "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth"
     fast_download "$MODELS_DIR/facexlib/detection_Resnet50_Final.pth" "https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth"
     fast_download "$MODELS_DIR/facexlib/parsing_parsenet.pth" "https://github.com/sczhou/CodeFormer/releases/download/v0.1.0/parsing_parsenet.pth"
-    # alignment_WFLW_4HG wird von SadTalker (facexlib Landmark-Alignment) gebraucht.
-    # Fehlte in der Liste -> facexlib lud beim ersten Render 185 MB nach.
     fast_download "$MODELS_DIR/facexlib/alignment_WFLW_4HG.pth" "https://github.com/xinntao/facexlib/releases/download/v0.1.0/alignment_WFLW_4HG.pth"
-    # LTX-Video + VAE
-    fast_download "$MODELS_DIR/diffusion_models/ltx-video-2b-v0.9.5.safetensors" "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors"
-    fast_download "$MODELS_DIR/vae/vae-ft-mse-840000-ema-pruned.safetensors" "https://huggingface.co/stabilityai/sd-vae-ft-mse-original/resolve/main/vae-ft-mse-840000-ema-pruned.safetensors"
     echo "✓ [parallel] Modell-Downloads abgeschlossen"
 }
 
 # ------------------------------------------------------------
-# Generative Modelle: LTX-2.5 (gated) + FLUX.1-schnell (Apache-2.0)
-# Läuft als ZWEITE parallele Phase. Bewusst defensiv:
-#   * kein Token  -> skip, kein Fehler (LipSync-Pod bootet weiter)
+# Generative Modelle: Qwen-Image/Edit (Kanon + Avatare) + Wan/InfiniteTalk
+# (Host-Talking-Head). Läuft als ZWEITE parallele Phase. Bewusst defensiv:
+#   * kein Token -> WARNUNG, aber die öffentlichen Repos laufen trotzdem
+#     (siehe hf_get) — nur gated Repos würden scheitern
 #   * INSTALL_GEN=0 -> skip
 #   * Größenprüfung erst nach dem Download (Phase 7)
-# Reihenfolge nach Nutzen: LTX-2.5 zuerst (Video+Audio, Multishot = konsistente
-# Charaktere über Schnitte), dann der Gemma-Textencoder, dann FLUX für den
-# Charakter-Kanon. Der optionale Prompt-Enhancer (~5 GB) bleibt aus (Kosten/Nutzen).
+# Reihenfolge nach Nutzen: Host-Renderer zuerst (Wan 2.1 + InfiniteTalk, ~50 GB),
+# dann Qwen-Image/-Edit für Kanon und die weiblichen Avatar-Varianten.
+# Am 18.09.2026 wurde der LTX-2.5-Block entfernt (Volume-Quota 200 GB); LTX wird
+# nur noch für B-Roll gebraucht und bei Bedarf über setup.sh nachgeholt
+# (Repo Lightricks/LTX-2.5, gated -> braucht HF_TOKEN).
 # ------------------------------------------------------------
 download_gen_models_background() {
     local t0; t0=$(date +%s)
@@ -439,10 +438,9 @@ download_gen_models_background() {
         return 0
     fi
     if ! hf_token >/dev/null; then
-        echo "--> [gen] übersprungen: kein HF-Token (HF_TOKEN oder $HF_TOKEN_FILE)"
-        echo "    LTX-2.5 ist ein GATED Repo — Token vom Account mit akzeptierter Lizenz nötig."
-        printf '{"installed": false, "reason": "no_hf_token"}\n' > "$GEN_STATUS"
-        return 0
+        echo "--> [gen] WARNUNG: kein HF-Token (HF_TOKEN oder $HF_TOKEN_FILE)"
+        echo "    Öffentliche Repos (Comfy-Org, Kijai, lightx2v) werden trotzdem geladen."
+        echo "    Nur GATED Repos (Lightricks/LTX-2.5) würden scheitern."
     fi
     if ! command -v aria2c >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
         echo "--> [gen] weder aria2c noch curl vorhanden -> übersprungen"
@@ -450,37 +448,45 @@ download_gen_models_background() {
         return 0
     fi
 
-    echo "--> [gen] LTX-2.5 + Qwen-Image/-Edit gestartet (Staging: $GEN_STAGE)"
-    mkdir -p "$GEN_STAGE" "$MODELS_DIR"/{diffusion_models,vae,text_encoders,clip,loras,unet,latent_upscale_models,model_patches}
+    echo "--> [gen] Wan/InfiniteTalk + Qwen-Image/-Edit gestartet (Staging: $GEN_STAGE)"
+    mkdir -p "$GEN_STAGE" "$MODELS_DIR"/{diffusion_models,vae,text_encoders,clip,loras,unet,latent_upscale_models,model_patches,audio_encoders,clip_vision}
 
-    # ---- LTX-2.5 (gated). Dateinamen am 18.09.2026 per HfApi verifiziert.
-    # int8_convrot statt nvfp4: NVFP4 ist ein Blackwell-Pfad, auf Ampere
-    # (A40/A6000) ist int8 die tragfähige Variante. Summe Kern ≈ 40 GB.
-    # Der Prompt-Enhancer (~5 GB) bleibt bewusst draußen (Zeit/Nutzen).
-    local ltx_files=(
-        "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
-        "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
-        "vae/ltx-2.5-video-vae-bf16.safetensors"
-        "vae/ltx-2.5-audio-vae-bf16.safetensors"
-        "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
-        "latent_upscale_models/ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors"
-        "model_patches/ltx-2.5-duration-head-bf16.safetensors"
+    # ---- Wan 2.1 I2V 480p + InfiniteTalk (Host-Talking-Head) --------------------
+    # Ersetzt Wav2Lip: Wav2Lip erzeugt nur eine 96x96-Mundregion, die beim
+    # Hochskalieren in 832x1216 zu Brei wird. InfiniteTalk generiert den ganzen
+    # Kopf mit natürlicher Kopfbewegung und stabiler Identität.
+    # Werte = offizielles ComfyUI-Template (video_wan2_1_infinitetalk.json):
+    #   ModelSamplingSD3 shift 8, KSamplerSelect euler, CFGGuider 1.0,
+    #   BasicScheduler "normal" 6 Steps, negativ = ConditioningZeroOut(positiv),
+    #   25 fps. Dateinamen am 18.09.2026 gegen die Repos verifiziert.
+    local wan_ok=0 wan_fail=0
+    local wan_files=(
+        "split_files/diffusion_models/wan2.1_i2v_480p_14B_fp16.safetensors"
+        "split_files/model_patches/wan2.1_infiniteTalk_single_fp16.safetensors"
+        "split_files/text_encoders/umt5_xxl_fp16.safetensors"
+        "split_files/vae/wan_2.1_vae.safetensors"
+        "split_files/clip_vision/clip_vision_h.safetensors"
     )
-    for f in "${ltx_files[@]}"; do
-        if hf_fetch "$GEN_STAGE/$f" "Lightricks/LTX-2.5" "$f"; then
-            ok=$((ok + 1))
+    for f in "${wan_files[@]}"; do
+        if hf_get "$GEN_STAGE/$f" "Comfy-Org/Wan_2.1_ComfyUI_repackaged" "$f"; then
+            wan_ok=$((wan_ok + 1))
         else
-            fail=$((fail + 1)); echo "   ⚠ LTX-2.5 $(basename "$f") fehlgeschlagen"
+            wan_fail=$((wan_fail + 1)); echo "   ⚠ Wan $(basename "$f") fehlgeschlagen"
         fi
     done
-    echo "   LTX-2.5: $ok/$((ok + fail)) Kerndateien"
-
-    # Optional: distilled-LoRA (8,9 GB) für schnellere Inferenz
-    if [ "${INSTALL_GEN_LORA:-0}" = "1" ]; then
-        LORA_REL="loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors"
-        hf_fetch "$GEN_STAGE/$LORA_REL" "Lightricks/LTX-2.5" "$LORA_REL" \
-            && echo "   ✓ LTX-2.5 distilled-LoRA" || echo "   ⚠ distilled-LoRA fehlgeschlagen"
-    fi
+    # Audio-Encoder: das offizielle InfiniteTalk-Template nutzt den chinesischen
+    # wav2vec2-base. Der mitgelieferte englische large-Encoder ist NICHT die
+    # Template-Wahl (deutsche Phoneme sind mit dem chinesischen Modell im Test
+    # sauber synchron gelaufen).
+    hf_get "$GEN_STAGE/audio_encoders/wav2vec2-chinese-base_fp16.safetensors" \
+        "Kijai/wav2vec2_safetensors" "wav2vec2-chinese-base_fp16.safetensors" \
+        && wan_ok=$((wan_ok + 1)) || { wan_fail=$((wan_fail + 1)); echo "   ⚠ wav2vec2-chinese-base fehlgeschlagen"; }
+    # 4-Step-Distill-LoRA (lightx2v) — Template-Wert: LoRA @1.0, 6 Steps, cfg 1.0
+    hf_get "$GEN_STAGE/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors" \
+        "Kijai/WanVideo_comfy" "Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors" \
+        && wan_ok=$((wan_ok + 1)) || { wan_fail=$((wan_fail + 1)); echo "   ⚠ lightx2v-I2V-LoRA fehlgeschlagen"; }
+    ok=$((ok + wan_ok)); fail=$((fail + wan_fail))
+    echo "   Wan/InfiniteTalk: $wan_ok/$((wan_ok + wan_fail)) Dateien"
 
     # ---- Qwen-Image 2512 + Qwen-Image-Edit 2511 (beide Apache-2.0, also
     # kommerziell frei). Edit + Multiple-Angles-LoRA ist der Weg zur
@@ -492,7 +498,7 @@ download_gen_models_background() {
         "split_files/vae/qwen_image_vae.safetensors"
     )
     for f in "${qwen_img[@]}"; do
-        if hf_fetch "$GEN_STAGE/$f" "Comfy-Org/Qwen-Image_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
+        if hf_get "$GEN_STAGE/$f" "Comfy-Org/Qwen-Image_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
     done
     local qwen_edit=(
         "split_files/diffusion_models/qwen_image_edit_2511_int8_convrot.safetensors"
@@ -500,8 +506,15 @@ download_gen_models_background() {
         "split_files/loras/Qwen-Image-Edit-2509-Relight.safetensors"
     )
     for f in "${qwen_edit[@]}"; do
-        if hf_fetch "$GEN_STAGE/$f" "Comfy-Org/Qwen-Image-Edit_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
+        if hf_get "$GEN_STAGE/$f" "Comfy-Org/Qwen-Image-Edit_ComfyUI" "$f"; then qwen_ok=$((qwen_ok + 1)); else qwen_fail=$((qwen_fail + 1)); fi
     done
+    # 4-Step-Lightning-LoRA für Edit-2511: liegt NICHT im Comfy-Org-Repo, sondern
+    # in einem eigenen Repo. Ohne sie laufen die Edit-Graphen mit 40 Steps / cfg 4
+    # (Faktor 10 langsamer) — alle Host-/Kanon-Skripte setzen steps=4, cfg=1.0.
+    hf_get "$GEN_STAGE/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors" \
+        "lightx2v/Qwen-Image-Edit-2511-Lightning" \
+        "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors" \
+        && qwen_ok=$((qwen_ok + 1)) || { qwen_fail=$((qwen_fail + 1)); echo "   ⚠ Lightning-LoRA fehlgeschlagen"; }
     ok=$((ok + qwen_ok)); fail=$((fail + qwen_fail))
     echo "   Qwen (Image+Edit): $qwen_ok/$((qwen_ok + qwen_fail)) Dateien"
     # FLUX.1-schnell wurde bewusst NICHT aufgenommen: Stand 08/2024, überholt
@@ -716,7 +729,7 @@ fi
 if [ -n "$GEN_DOWNLOAD_PID" ]; then
     wait "$GEN_DOWNLOAD_PID" || true
     if grep -q '"installed": true' "$GEN_STATUS" 2>/dev/null; then
-        phase_ok "Gen-Modelle (LTX-2.5 + Qwen-Image/-Edit)"
+        phase_ok "Gen-Modelle (Wan/InfiniteTalk + Qwen-Image/-Edit)"
     else
         GEN_REASON=$(sed -n 's/.*"reason": "\([^"]*\)".*/\1/p' "$GEN_STATUS" 2>/dev/null)
         phase_ok "Gen-Modelle uebersprungen (${GEN_REASON:-unbekannt})"
@@ -859,14 +872,17 @@ if [ "$INSTALL_GEN" = "1" ] && grep -q '"installed": true' "$GEN_STATUS" 2>/dev/
         if [ "$size" -ge "$min_mb" ]; then phase_ok "Gen: $label (${size} MB)"
         else phase_fail "Gen: $label zu klein (${size} MB)"; fi
     }
-    gen_check "$MODELS_DIR/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8*.safetensors" 10000 "LTX-2.5 Modell"
-    gen_check "$MODELS_DIR/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8*.safetensors" 5000 "Gemma4-Textencoder"
-    gen_check "$MODELS_DIR/vae/ltx-2.5-video-vae-bf16.safetensors" 500 "LTX Video-VAE"
-    gen_check "$MODELS_DIR/vae/ltx-2.5-audio-vae-bf16.safetensors" 100 "LTX Audio-VAE"
-    gen_check "$MODELS_DIR/latent_upscale_models/ltx-2.5-latent-spatial-upscaler*.safetensors" 300 "LTX Spatial-Upscaler"
+    gen_check "$MODELS_DIR/diffusion_models/wan2.1_i2v_480p_14B_fp16.safetensors" 20000 "Wan 2.1 I2V 480p"
+    gen_check "$MODELS_DIR/model_patches/wan2.1_infiniteTalk_single_fp16.safetensors" 3000 "InfiniteTalk-Patch"
+    gen_check "$MODELS_DIR/text_encoders/umt5_xxl_fp16.safetensors" 6000 "umt5-Textencoder"
+    gen_check "$MODELS_DIR/vae/wan_2.1_vae.safetensors" 100 "Wan 2.1 VAE"
+    gen_check "$MODELS_DIR/clip_vision/clip_vision_h.safetensors" 500 "CLIP-Vision (Wan)"
+    gen_check "$MODELS_DIR/audio_encoders/wav2vec2-chinese-base_fp16.safetensors" 100 "wav2vec2-Audioencoder"
+    gen_check "$MODELS_DIR/loras/lightx2v_I2V_14B_480p*.safetensors" 300 "lightx2v-I2V-LoRA"
     gen_check "$MODELS_DIR/diffusion_models/qwen_image_2512*.safetensors" 10000 "Qwen-Image 2512"
     gen_check "$MODELS_DIR/diffusion_models/qwen_image_edit_2511_int8*.safetensors" 10000 "Qwen-Image-Edit 2511"
     gen_check "$MODELS_DIR/loras/Qwen-Edit*-Multiple-angles.safetensors" 100 "Multiple-Angles-LoRA"
+    gen_check "$MODELS_DIR/loras/Qwen-Image-Edit-2511-Lightning-4steps*.safetensors" 300 "Lightning-4steps-LoRA"
 fi
 
 # ------------------------------------------------------------
