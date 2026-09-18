@@ -65,6 +65,8 @@ Die Figur ist eingefroren: Gesicht `nordic_ash`, Brust B, Gesäß B. Ein Charakt
 
 ## 5. Upload
 
+### YouTube
+
 | Punkt | Wert |
 |---|---|
 | Kanal | **The Prickle** `UCjKqU1J5wio-sd7AigvQm2g` |
@@ -73,6 +75,24 @@ Die Figur ist eingefroren: Gesicht `nordic_ash`, Brust B, Gesäß B. Ein Charakt
 | Kategorie | 22 (People & Blogs, im Modul fest) |
 | Hashtags | `#Shorts` + 4 Themen-Tags |
 | **Nach dem Upload prüfen** | `videos.list` → `uploadStatus=processed`, `duration`, `definition=hd`, `privacyStatus` |
+
+### TikTok (Kette MinIO → Buffer)
+
+| Punkt | Wert |
+|---|---|
+| Kanal | `@_the_prickle`, Buffer-Channel-ID `69fdf6675c4c051afa243b4b` (aus der **API-Antwort** lesen, nicht aus Notizen) |
+| Organisation | `69fdf62899d12587b2ba02fe` |
+| Skript | `tiktok_publish.py` (`--check` liest nur, `--publish` postet) |
+| Referenz | `podcast-clipper/pipeline/tiktok_upload.py` → `upload_video()` — **übernehmen, nicht nachbauen** |
+| Media-Weg | Video in den **öffentlichen** MinIO-Bucket `buffer` (`https://s3.o.qtx.de`) → URL in `assets[].video.url` |
+| Credentials | `~/.hermes/auth/s3_credentials.json`, `~/.hermes/auth/buffer_token.json` |
+| Modus | **`shareNow`** (sofort veröffentlichen, nicht einplanen) |
+| **Nach dem Posten prüfen** | (a) Media-URL per HTTP: `200`, `content-type: video/mp4`, `content-length` = Dateigröße; (b) Post per ID abfragen bis `status=sent` |
+
+**Falle:** Die Queue-Abfrage (`posts.totalCount`) liefert mit diesem Token **FORBIDDEN** — die
+Referenz-Implementierung fängt das ab und meldet fälschlich „0/10". Der Stand des Free-Plan-Limits
+(10 *geplante* Posts) ist damit **nicht prüfbar**. Mit `shareNow` ist das unkritisch, weil sofortige
+Posts das Plan-Kontingent nicht belegen. Einzelabfrage `post(input:{id})` funktioniert dagegen.
 
 ## 6. Qualitätsregeln aus echten Ausfällen
 
@@ -88,6 +108,11 @@ Die Figur ist eingefroren: Gesicht `nordic_ash`, Brust B, Gesäß B. Ein Charakt
 
 ## 7. Erste Produktion nach diesem Standard
 
-„Hummer knurren – aber nicht mit dem Maul" — YouTube **`iXVZ8BruYR8`**, public, 45 s, hd,
-Kanal The Prickle, veröffentlicht 18.09.2026 14:31 UTC.
+„Hummer knurren – aber nicht mit dem Maul", veröffentlicht 18.09.2026:
+
+| Kanal | Nachweis |
+|---|---|
+| YouTube (The Prickle) | `iXVZ8BruYR8` — public, PT45S, `definition=hd`, `uploadStatus=processed`, 14:31 UTC |
+| TikTok (`@_the_prickle`) | Buffer-Post `6aad4c0bbce81a431d4b42b6`, `status=sent`, 14:34 UTC; Media-URL `200 / video/mp4 / 36.261.044 B` |
+
 Rohschnitt mit Wav2Lip-Host: verworfen (siehe `short_final_infinitetalk_KAPUTT_46s_11clips.mp4`).

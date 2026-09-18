@@ -69,5 +69,19 @@
     "privacy_default": "public",
     "hashtags": ["#Shorts", "#Hummer", "#Meeresbiologie", "#Wissen", "#Natur"],
     "verifikation": "videos.list -> uploadStatus=processed, duration, definition=hd, privacyStatus"
+  },
+  "tiktok": {
+    "weg": "MinIO (oeffentlicher Bucket) -> Buffer createPost",
+    "skript": "tiktok_publish.py",
+    "referenz_implementierung": "/home/claw/workspace/podcast-clipper/pipeline/tiktok_upload.py",
+    "kanal": "@_the_prickle",
+    "buffer_channel_id": "69fdf6675c4c051afa243b4b",
+    "buffer_org_id": "69fdf62899d12587b2ba02fe",
+    "s3_endpoint": "https://s3.o.qtx.de",
+    "s3_bucket": "buffer",
+    "credentials": ["~/.hermes/auth/s3_credentials.json", "~/.hermes/auth/buffer_token.json"],
+    "mode": "shareNow",
+    "verifikation": "Media-URL HTTP 200 + content-type video/mp4 + content-length == Dateigroesse; post(input:{id}) bis status=sent",
+    "falle": "posts.totalCount liefert FORBIDDEN (Referenz meldet faelschlich 0/10); shareNow belegt das Free-Plan-Kontingent nicht"
   }
 }
