@@ -102,7 +102,7 @@ Szenen, in denen die Figur ohne Referenz auftreten soll.
 | `script.json` | Szenenplan: je Szene Text, Typ (`host`/`broll`), Bild-Prompt, Clip-Prompt, Plandauer |
 | `make_narration.py` | edge-tts je Szene + **gemessene** Dauern nach `timing.json` |
 | `make_images.py` | Host-Szenen über den Kanon (Edit+Angles), B-Roll via T2I 768×1344; `--only 4,10` für Einzelszenen |
-| `make_clips.py` | LTX-I2V je Bild, Länge aus `timing.json` + Luft, auf 8n+1 gerundet |
+| `make_clips.py` | LTX-I2V je Bild, Länge aus `timing.json` + Luft, auf 8n+1 gerundet — **kopiert jedes Bild vorher nach `ComfyUI/input/`** |
 | `compose.py` | Clips concat → 1080×1920, Narration-Zeitleiste, Whisper-Untertitel, Ambient-Bett mit Sidechain-Ducking, −14 LUFS |
 
 Regeln, die sich bewährt haben:
@@ -118,6 +118,11 @@ Regeln, die sich bewährt haben:
   Fehlgriff).
 * LTX-Ton auf −26 dB absenken und unter die Narration ducken: er ist Atmo, kann aber
   Sprachreste des Prompts enthalten.
+* **`LoadImage` liest ausschließlich aus `ComfyUI/input/`** — nicht aus dem Projekt­ordner.
+  Wer die Szenenbilder dort liegen lässt, bekommt für **jeden** Clip
+  `custom_validation_failed: image - Invalid image file: szene_01.png` und 0 Clips,
+  obwohl alle Bilder korrekt erzeugt wurden. `make_clips.py` kopiert sie deshalb
+  vor dem Aufruf nach `input/` (gemessen: 10 von 10 Clips fehlgeschlagen).
 * **Untertitel gegenprüfen:** Whisper verhört Fachbegriffe. Gemessen bei diesem Thema:
   „Malzähne" statt Mahlzähne, „Malwerk" statt Mahlwerk, „Heutung" statt Häutung.
   Deshalb `untertitel_korrekturen` im Skript-JSON pflegen — `compose.py` wendet sie

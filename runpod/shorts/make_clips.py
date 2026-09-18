@@ -140,7 +140,12 @@ def main() -> None:
         secs = tdur.get(sz["id"], sz["dauer_s"]) + a.luft
         fr = frames_for(secs)
         total_frames += fr
-        img = f"szene_{sz['id']:02d}.png"
+        # LoadImage liest NUR aus ComfyUI/input/ - die Szenenbilder liegen aber im
+        # Projektordner. Ohne diese Kopie scheitert jeder Clip mit
+        # "custom_validation_failed: image - Invalid image file".
+        src_img = os.path.join(base, "images", f"szene_{sz['id']:02d}.png")
+        img = f"short_{os.path.basename(base)}_szene_{sz['id']:02d}.png"
+        shutil.copyfile(src_img, os.path.join("/workspace/ComfyUI/input", img))
         prefix = f"short_hummer/clip_{sz['id']:02d}"
         t0 = time.time()
         try:
