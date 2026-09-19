@@ -413,3 +413,56 @@ die beim Laden fehlschlagen.
 **Download-Resume kann Dateien korrumpieren:** `curl -C -` erzeugte eine **23,1 GB** grosse
 Datei, wo 16,4 GB erwartet waren. Nach jedem Download die Byte-Groesse gegen den
 Sollwert pruefen; eine zu grosse Datei faellt sonst erst beim Modell-Load auf.
+
+## TTS / Charakterstimme auf dem Pod (19.09.2026)
+
+Zwei Modelle, **zwei getrennte venvs** — beide Konflikte sind real aufgetreten:
+
+| venv | Paket | Modell | Rolle |
+|---|---|---|---|
+| `/workspace/qwenvenv` | `qwen-tts` | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` + `Tokenizer-12Hz` | **Identität**: Stimme aus Textbeschreibung, ohne Referenzaudio |
+| `/workspace/ttsvenv` | `chatterbox-tts` | `ResembleAI/chatterbox` | **Vortrag**: Klangfarbe per Referenz, Emotion per `exaggeration` |
+
+**Konflikt 1 — transformers unvereinbar:** `chatterbox-tts 0.1.7` verlangt
+`transformers==5.2.0`, `qwen-tts` verlangt `4.57.3`. In einem venv meldet uv
+`requirements are unsatisfiable`. Deshalb getrennte venvs (je eigenes torch ≈ 2,5 GB).
+
+**Konflikt 2 — chatterbox zerschießt das torch-Triple:** nach der Installation stuft
+chatterbox `torch` auf **2.6.0+cu124** herunter, `torchvision` bleibt auf `0.24.0+cu128`.
+Folge: `RuntimeError: operator torchvision::nms does not exist`, und der transformers-Lazy-Import
+stirbt mit `Could not import module 'LlamaModel'. Are this object's requirements defined correctly?`.
+**Reparatur (muss NACH chatterbox laufen):**
+
+```bash
+uv pip install --python /workspace/ttsvenv/bin/python --index-url https://download.pytorch.org/whl/cu128 \
+    "torch==2.9.0+cu128" "torchvision==0.24.0+cu128" "torchaudio==2.9.0+cu128"
+```
+
+Prüfung danach: `torch 2.9.0+cu128 | torchvision 0.24.0+cu128` **und** `from transformers import
+LlamaModel` muss gehen — sonst ist der Import-Fehler nur verdeckt.
+
+**Setup:** `install_tts_background()` in `setup.sh` (Schalter `INSTALL_TTS=0` schaltet die Phase ab,
+Status in `/workspace/tts_models_status.json`). Manuell/nachziehbar: `tts_install2.sh`
+(`MODELS=1` lädt zusätzlich ~18 GB Modelle). Platzbedarf: venvs ~6 GB + Modelle ~18 GB.
+
+**Nutzung (Beispiel-API):**
+
+```python
+# Identität (qwenvenv)
+from qwen_tts import Qwen3TTSModel
+m = Qwen3TTSModel.from_pretrained("/workspace/tts_models/qwen3tts-voicedesign",
+                                  device_map="cuda:0", dtype=torch.bfloat16,
+                                  attn_implementation="sdpa")   # flash_attention_2 nur wenn installiert
+wavs, sr = m.generate_voice_design(text="…", language="German", instruct="A young German woman …")
+
+# Zeilen (ttsvenv) — Referenz ist die Identitätsdatei
+from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+c = ChatterboxMultilingualTTS.from_pretrained(device="cuda", t3_model="v3")
+wav = c.generate(text, language_id="de", audio_prompt_path="id_ref.wav",
+                 exaggeration=0.6, cfg_weight=0.5)
+```
+
+**Wichtig:** Die **Identität ist die WAV-Datei**, nicht der Seed. Einmal erzeugt und abgelegt, ist die
+Stimme damit exakt reproduzierbar — die Beschreibung samt Seed wird nur zur Dokumentation notiert.
+Chatterbox **V3** ist die aktuelle Multilingual-Version und ausdrücklich gegen die
+Wiederholungsschleifen optimiert, die mit V2 aufgetreten waren (21 s Ausgabe für einen 4,5-s-Satz).

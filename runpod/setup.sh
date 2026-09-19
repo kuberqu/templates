@@ -68,7 +68,23 @@ INSTALL_QWEN="${INSTALL_QWEN:-1}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-$BASE_DIR/.hf_token}"
 GEN_STAGE="$BASE_DIR/gen_models"          # hf download --local-dir (Staging)
 GEN_STATUS="$BASE_DIR/gen_models_status.json"
+
+# ---- TTS / Charakterstimme (Qwen3-TTS VoiceDesign + Chatterbox) -------------
+# Zwei Pakete, ZWEI venvs — zwei Konflikte sind auf dem Pod real aufgetreten:
+#  1. chatterbox-tts 0.1.7 verlangt transformers==5.2.0, qwen-tts verlangt 4.57.3.
+#     In einem venv unlösbar ("requirements are unsatisfiable") -> getrennte venvs.
+#  2. chatterbox-tts stuft torch auf 2.6.0+cu124 herunter, torchvision bleibt auf
+#     0.24.0+cu128 -> "operator torchvision::nms does not exist" -> transformers
+#     stirbt beim Lazy-Import ("Could not import module 'LlamaModel'"). Reparatur:
+#     das gepinnte Triple NACH chatterbox erneut installieren.
+#   INSTALL_TTS=0 -> überspringen (spart ~6 GB Pakete + ~18 GB Modelle)
+INSTALL_TTS="${INSTALL_TTS:-1}"
+TTS_VENV="$BASE_DIR/ttsvenv"              # Chatterbox
+QWEN_VENV="$BASE_DIR/qwenvenv"            # Qwen3-TTS VoiceDesign
+TTS_STAGE="$BASE_DIR/tts_models"
+TTS_STATUS="$BASE_DIR/tts_models_status.json"
 GEN_DOWNLOAD_PID=""
+TTS_DOWNLOAD_PID=""
 
 FAILED_PHASES=()
 PHASE_RESULTS=()
@@ -560,12 +576,87 @@ download_gen_models_background() {
     return 0
 }
 
+# ------------------------------------------------------------
+# TTS-Modelle + Charakterstimme (eigene venvs, läuft parallel)
+# ------------------------------------------------------------
+# Läuft als eigene Hintergrund-Phase, damit der Fast-Boot auf intaktem Volume
+# unverändert schnell bleibt. Ein Fehlschlag degradiert nur den Stimmbau, nicht
+# den LipSync-Kern.
+install_tts_background() {
+    local t0 ok=0 fail=0
+    t0=$(date +%s)
+    printf '{"installed": false, "reason": "started"}\n' > "$TTS_STATUS"
+
+    if [ "$INSTALL_TTS" != "1" ]; then
+        echo "--> [tts] übersprungen: INSTALL_TTS=$INSTALL_TTS"
+        printf '{"installed": false, "reason": "INSTALL_TTS=%s"}\n' "$INSTALL_TTS" > "$TTS_STATUS"
+        return 0
+    fi
+
+    mk_tts_venv() {   # mk_tts_venv <pfad>
+        if [ -x "$1/bin/python" ]; then echo "   venv vorhanden: $1"; return 0; fi
+        "$UV_BIN" venv "$1" --python "$VENV/bin/python" >/dev/null 2>&1 || return 1
+        return 0
+    }
+    # Gepinntes Triple — MUSS nach chatterbox erneut laufen (siehe Konflikt 2 oben)
+    tts_torch() {     # tts_torch <venv-python>
+        "$UV_BIN" pip install --python "$1" --index-url "$TORCH_INDEX" "${TORCH_PIN[@]}" \
+            >/dev/null 2>&1
+    }
+
+    echo "--> [tts] Chatterbox + Qwen3-TTS (zwei venvs)"
+    mk_tts_venv "$TTS_VENV" && tts_torch "$TTS_VENV/bin/python" \
+        && "$UV_BIN" pip install --python "$TTS_VENV/bin/python" -q \
+             chatterbox-tts soundfile "huggingface_hub[cli]" >/dev/null 2>&1 \
+        && { echo "   ✓ chatterbox-tts"; ok=$((ok + 1)); } || { echo "   ⚠ chatterbox-tts fehlgeschlagen"; fail=$((fail + 1)); }
+    tts_torch "$TTS_VENV/bin/python" \
+        && echo "   ✓ torch-Triple nach chatterbox wiederhergestellt" || echo "   ⚠ Triple-Reparatur fehlgeschlagen"
+
+    mk_tts_venv "$QWEN_VENV" && tts_torch "$QWEN_VENV/bin/python" \
+        && "$UV_BIN" pip install --python "$QWEN_VENV/bin/python" -q qwen-tts soundfile \
+             >/dev/null 2>&1 \
+        && { echo "   ✓ qwen-tts"; ok=$((ok + 1)); } || { echo "   ⚠ qwen-tts fehlgeschlagen"; fail=$((fail + 1)); }
+    tts_torch "$QWEN_VENV/bin/python" >/dev/null 2>&1 || true
+
+    # Modelle vorladen (VoiceDesign = Identität, chatterbox = Klangfarbe/Vortrag)
+    mkdir -p "$TTS_STAGE"
+    export HF_HOME="$TTS_STAGE/.hf"
+    local tok; tok="$(hf_token 2>/dev/null || true)"
+    tts_hf() {        # tts_hf <repo> <ziel> <hf-binary>
+        local repo="$1" dir="$2" tool="$3" args=()
+        [ -n "$tok" ] && args=(--token "$tok")
+        if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then echo "   vorhanden: $repo"; return 0; fi
+        "$tool" download "$repo" --local-dir "$dir" ${args[@]+"${args[@]}"} >/dev/null 2>&1
+    }
+    if [ -x "$QWEN_VENV/bin/hf" ]; then
+        tts_hf "Qwen/Qwen3-TTS-Tokenizer-12Hz"        "$TTS_STAGE/qwen3tts-tokenizer" "$QWEN_VENV/bin/hf" \
+            && ok=$((ok + 1)) || { echo "   ⚠ Tokenizer fehlgeschlagen"; fail=$((fail + 1)); }
+        tts_hf "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign" "$TTS_STAGE/qwen3tts-voicedesign" "$QWEN_VENV/bin/hf" \
+            && ok=$((ok + 1)) || { echo "   ⚠ VoiceDesign fehlgeschlagen"; fail=$((fail + 1)); }
+    fi
+    if [ -x "$TTS_VENV/bin/hf" ]; then
+        tts_hf "ResembleAI/chatterbox" "$TTS_STAGE/chatterbox" "$TTS_VENV/bin/hf" \
+            && ok=$((ok + 1)) || { echo "   ⚠ chatterbox-Modelle fehlgeschlagen"; fail=$((fail + 1)); }
+    fi
+
+    local secs; secs=$(dur "$t0")
+    local size; size=$(du -sh "$TTS_STAGE" 2>/dev/null | cut -f1)
+    echo "   [tts] $ok Schritte ok, $fail fehlgeschlagen, Modelle: ${size:-0}"
+    printf '{"installed": %s, "schritte_ok": %s, "fehlgeschlagen": %s, "stage": "%s", "seconds": %s}\n' \
+        "$([ "$fail" -eq 0 ] && echo true || echo false)" "$ok" "$fail" "$TTS_STAGE" "$secs" > "$TTS_STATUS"
+    return 0
+}
+
 step "2. Modell-Downloads (parallel)"
 download_models_background &
 DOWNLOAD_PID=$!
 if [ "$INSTALL_GEN" = "1" ]; then
     download_gen_models_background &
     GEN_DOWNLOAD_PID=$!
+fi
+if [ "$INSTALL_TTS" = "1" ]; then
+    install_tts_background &
+    TTS_DOWNLOAD_PID=$!
 fi
 
 # ------------------------------------------------------------
@@ -757,6 +848,17 @@ if [ -n "$GEN_DOWNLOAD_PID" ]; then
     else
         GEN_REASON=$(sed -n 's/.*"reason": "\([^"]*\)".*/\1/p' "$GEN_STATUS" 2>/dev/null)
         phase_ok "Gen-Modelle uebersprungen (${GEN_REASON:-unbekannt})"
+    fi
+fi
+
+# TTS/Charakterstimme: eigener venv-Satz, Fehlschlag degradiert nur den Stimmbau
+if [ -n "$TTS_DOWNLOAD_PID" ]; then
+    wait "$TTS_DOWNLOAD_PID" || true
+    if grep -q '"installed": true' "$TTS_STATUS" 2>/dev/null; then
+        phase_ok "TTS (Chatterbox + Qwen3-TTS VoiceDesign, zwei venvs)"
+    else
+        TTS_INFO=$(tr -d '\n' < "$TTS_STATUS" 2>/dev/null | head -c 120)
+        phase_ok "TTS teilweise/uebersprungen: ${TTS_INFO:-unbekannt}"
     fi
 fi
 
